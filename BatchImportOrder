@@ -1,0 +1,728 @@
+package storage.orderForm.dao;
+
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import org.apache.commons.beanutils.DynaBean;
+import org.apache.commons.beanutils.LazyDynaBean;
+import org.apache.commons.lang.StringUtils;
+
+import storage.orderForm.SchemeBossValidate;
+import storage.util.BaseDao;
+import storage.util.JdbcUtil;
+import storage.util.RequestUtils;
+import storage.util.StringUtil;
+import work.common.EMPBusiness;
+import com.common.DBConnectionManager;
+import com.common.Tools;
+
+/**
+ * 批量导入订单
+ * @author zhongzy
+ * @时间  2011-5-5 上午10:06:30
+ */
+public class BatchImportOrder extends BaseDao {
+
+  private  List<DynaBean> aEreaList = null;		//区域
+	private  List<DynaBean> aTypeList = null;		//类型
+	private  List<DynaBean> aProductList = null;		//产品
+	private  List<DynaBean> aSchemeList = null;		//营销方案
+	private  List<DynaBean> aDictionaryList = null;	//数据字典
+	private  List<DynaBean> aExpressageList = null;   //物流商
+	private  List<DynaBean> partnersList = null;      //合作商
+	private  List<DynaBean> projectList = null;		  //项目名称
+	private String sMSG = "";
+
+	/**
+	 * 获取错误信息
+	 * @return
+	 */
+	public String getSMSG() {
+		return sMSG;
+	}
+
+	private void setSMSG(String smsg) {
+		sMSG += smsg;
+	}
+
+	/*
+	 * 在导出数据之前需要查询到：分公司ID,产品类型,子类,营销方案,支付方式,证件类型,区域
+	 * 1 用于检验用户导入的Excel数据是否正确。
+	 * 2 同时作为订单的部分字段数据存在
+	 */
+	public BatchImportOrder() {
+		super(BatchImportOrder.class);
+
+		String sEreaSql = "SELECT id, parentId, name, level FROM st_erea ORDER BY level ";
+		String sTypeSql = "SELECT id, parentId, name FROM st_type ORDER BY id, parentId ";
+		String sProductSql = "SELECT id, (name + '－' + model + '－' + color) AS name,typeID FROM st_product ";	//可用的产品
+		String dateTime = Tools.getCurrDateTime();
+		String sSchemeSql = "SELECT id, name FROM st_scheme WHERE startTime<='" + dateTime + "' AND endTime>='" + dateTime + "'";
+		String sDictionarySql = "SELECT id, name, values_, type FROM st_dictionary ORDER BY type";		//支付方式证件类型
+		String sExpressageSql = "SELECT  id,name FROM st_expressage";
+		String partnersSql = "SELECT partners_id,partners_name FROM st_partners";
+		String projectSql = "SELECT proj_id,name FROM wp_project";
+		aEreaList = JdbcUtil.query(sEreaSql);
+		aTypeList = JdbcUtil.query(sTypeSql);
+		aProductList = JdbcUtil.query(sProductSql);
+		aSchemeList = JdbcUtil.query(sSchemeSql);
+		aDictionaryList = JdbcUtil.query(sDictionarySql);
+		aExpressageList = JdbcUtil.query(sExpressageSql);
+		partnersList = JdbcUtil.query(partnersSql);
+		projectList = JdbcUtil.query(projectSql);
+
+	}
+
+
+	/**
+	 * 检测Excel内容,同时将正确的数据插入数据库
+	 * @param aExcelData
+	 * @param sUserId
+	 * @param sNickName
+	 * @return
+	 * @throws SQLException
+	 */
+	synchronized int[] checkExcel(List<String[]> aExcelData, String sUserId, String sNickName) throws SQLException {
+		DataBaseDao dataBaseDao = new DataBaseDao();
+		int success = 0, failure = 0;
+		DBConnectionManager connMgr = DBConnectionManager.getInstance();
+		Connection con = connMgr.getConnection(POOL);
+		PreparedStatement oPstmt = null;		//订单插入预编译语句
+		PreparedStatement oPstmtLog = null;		//订单日志插入预编译语句
+		PreparedStatement oUpdateProduct = null;	//更新产品可用数量语句对象
+		PreparedStatement oPstmtInsertProductAmountLog = null;	//添加产品剩余数量变更日志
+		PreparedStatement updateProductLock = null;	//更新产品可用数量语句对象
+
+		StringBuffer sql = new StringBuffer();
+		con.setAutoCommit(false);
+
+		sql.append(" INSERT INTO st_orderForm	\n");
+		//		分公司|产品类型|子类|产品|产品序列号
+		sql.append(" (company,	type1,	type2,	product,	serialNo,	\n");
+		//		营销方案|新购号码|信息机套餐|捆绑业务1|捆绑业务2
+		sql.append(" scheme,	newNo,	newsSeries,	operation1,	operation2,	\n");
+		//		付款金额|支付方式|联系电话|机主姓名|证据类型
+		sql.append(" payMoney,	payMode,	phone,	owner,	certificate,	\n");
+		//		证件号码|区域|详细地址|邮政编码|物流商
+		sql.append(" certificateNo,	erea,	address,	postalcode,	expressage,	\n");
+		//		订单类型|客户号码|备注
+		sql.append(" type,	clientNo, remart, id,	creatTime,	\n");
+		sql.append(" creatBy,	creatName,	state, commend, partners, projectName,orderResult)	\n");
+		sql.append(" VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+		String sLogSql = "INSERT INTO st_orderLog(orderId, creatTime, creatBy, action)	VALUES(?, ?, ?, ?)";
+		String sUpdateProduct = "UPDATE st_product SET amount=amount-1 WHERE id=?";
+		StringBuffer oInsertProductAmountLog = new StringBuffer();
+		oInsertProductAmountLog.append("INSERT INTO st_product_amount_log	\n");
+		oInsertProductAmountLog.append("(productId, createTime, createBy, operator, beforeChange, afterChange, change, orderId, action)	\n");
+		oInsertProductAmountLog.append("VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)");
+		String sUpdateProductLock = "UPDATE st_product_lock SET amount=amount-1 WHERE expressage=? AND type2=? AND productID=?";
+
+		try {
+			oPstmt = con.prepareStatement(sql.toString());
+			oPstmtLog = con.prepareStatement(sLogSql);
+			oUpdateProduct = con.prepareStatement(sUpdateProduct);
+			oPstmtInsertProductAmountLog = con.prepareStatement(oInsertProductAmountLog.toString());
+			updateProductLock = con.prepareStatement(sUpdateProductLock);
+			System.out.println("===========批量导入订单数据行数=========="+aExcelData.size());
+			for(int i=0; i<aExcelData.size(); i++) {
+				if(i%10==0){
+					System.out.println("==aExcelData====="+i+"============");
+				}
+				String sMsgTemp = "";
+				String[] temp = aExcelData.get(i);
+				String id = Tools.getUUID();					//ID
+				String creatTime = Tools.getCurrDateTime();		//当前时间
+				HashMap<String, String> omap = new HashMap<String, String>();
+				for (int pool=0; pool<temp.length; pool++) {
+					String sCellValue = temp[pool];
+					omap.put(StringUtil.numToLetter(pool+1), StringUtil.toString(sCellValue));
+				}
+				String A = getEreaId(omap.get("A"));
+				if (StringUtils.isEmpty(A)) {
+					sMsgTemp += "&#9;A单元格，分公司不存在；";
+				}
+				String B = getType("", omap.get("B"));
+				if (StringUtils.isEmpty(B)) {
+					sMsgTemp += "&#9;B单元格，产品类型不存在；";
+				}
+				String C = StringUtil.toString(getType("", omap.get("C")),"");
+				if (StringUtils.isEmpty(C)) {
+					sMsgTemp += "&#9;C单元格，产品子类型不存在；";
+				}
+				String D = StringUtil.toString(omap.get("D"),"");
+				int nAmount = 0;
+				if (StringUtils.isNotEmpty(D)) {
+					Map<String,String> product = getProductId(D);
+					D = StringUtil.toString(product.get("id"),"");
+					String typeId = StringUtil.toString(product.get("typeId"),"");
+					if (StringUtils.isEmpty(D)) {
+						sMsgTemp += "&#9;D单元格，产品不存在；";
+					}
+					else {
+						if(!C.equals(typeId)){
+							sMsgTemp += "&#9;D单元格，该产品对应产品子类型不存在；";
+						}else{
+							nAmount = dataBaseDao.getProductAmount(D);
+							if (nAmount <= 0) {
+								sMsgTemp += "&#9;D单元格，产品没有可用的库存；";
+							}
+						}
+					}
+				}else{
+					sMsgTemp += "&#9;D单元格，产品不存在；";
+				}
+				String E = "";
+				String F = getSchemeId(omap.get("F"));
+				if (StringUtils.isEmpty(F)) {
+					sMsgTemp += "&#9;F单元格，营销方案不存在或者营销方案已过期；";
+				}
+				String K = omap.get("K");
+				if (!StringUtil.isNumber(K)) {
+					sMsgTemp += "&#9;K单元格，付款金额格式不正确；";
+				}
+				String L = omap.get("L");
+				if (!getDictionaryId("支付方式", L)) {
+					sMsgTemp += "&#9;L单元格，支付方式不正确；";
+				}
+//				String M = StringUtil.filterUnPhone(omap.get("M"));
+//				if (StringUtils.isEmpty(M)) {
+//					sMsgTemp += "&#9;M单元格，联系电话格式不正确；";
+//				}
+				String M = omap.get("M");
+				String N = omap.get("N");
+				if (StringUtils.isEmpty(N)) {
+					sMsgTemp += "&#9;N单元格，机主姓名不能为空；";
+				}
+				String O = omap.get("O");
+				if(!getDictionaryId("证件类型", O)) {
+					sMsgTemp += "&#9;O单元格，证件类型不存在；";
+				}
+
+				String P = omap.get("P");
+				if (StringUtils.isEmpty(P)) {
+					sMsgTemp += "&#9;O单元格，证件号码不存在；";
+				}else{
+					if ("身份证".equals(O)) {
+						if (!P.matches("((11|12|13|14|15|21|22|23|31|32|33|34|35|36|37|41|42|43|44|45|46|50|51|52|53|54|61|62|63|64|65)[0-9]{4})(([1|2][0-9]{3}[0|1][0-9][0-3][0-9][0-9]{3}[X0-9])|([0-9]{2}[0|1][0-9][0-3][0-9][0-9]{3}))")) {
+							sMsgTemp += "&#9;P单元格，不是正确的证件号码；";
+						}
+					}
+					P = P.toUpperCase();
+				}
+
+
+				String Q = omap.get("Q");
+				if (StringUtils.isNotEmpty(Q)) {
+					Q = getEreaId(Q);
+					if (StringUtils.isEmpty(Q)) {
+						sMsgTemp += "&#9;Q单元格，区域不存在；";
+					}
+				}
+//				else {
+//					sMsgTemp += "&#9;Q单元格，区域不能为空；";
+//				}
+				String R = omap.get("R");
+				if (StringUtils.isEmpty(R)) {
+					sMsgTemp += "&#9;R单元格，详细地址不能为空；";
+				}
+				String S = omap.get("S");
+				if (StringUtils.isNotEmpty(S)) {
+					if (!S.matches("^[1-9][0-9]{5}$")) {
+						sMsgTemp += "&#9;S单元格，邮政编码不正确；";
+					}
+				}
+
+				DataBaseDao dbDao = new DataBaseDao();
+				List<DynaBean> expList = null;
+				String T = getExpressage(omap.get("T"));
+				String expressageId = "";
+				if(StringUtils.isEmpty(T)){
+					List<DynaBean> expLevel = dbDao.initSelect("st_expressage", "TOP 1 id", "name", "ORDER BY expressLevel ASC");
+					for(DynaBean pBean : expLevel){//根据物流商优先级别自动分配订单（如果优先级高的物流商没有可用库存产品，自动分配给次优先级物流商）
+						String expId = StringUtil.toString(pBean.get("value"),"");//获取物流商ＩＤ
+						if(!"".equals(expId)){
+							expList = dbDao.getProductAmountLock(D,expId);//查询物流商对应产品是否有可用库存
+							if(expList.size()>0){
+								int amount = Integer.parseInt(expList.get(0).get("amount")+"");
+								if(amount>0){
+									expressageId = expId;
+									break;
+								}
+							}
+						}
+					}
+				}else{
+					 expList = dbDao.getProductAmountLock(D,T);//查询物流商对应产品是否有可用库存
+					 if(expList.size()>0){
+						 int amount = Integer.parseInt(expList.get(0).get("amount")+"");
+						 int lockAmount = Integer.parseInt(expList.get(0).get("lockAmount")+"");
+						 if(amount==0 && lockAmount == 0){
+							 sMsgTemp += "&#9;T单元格，"+ omap.get("T") +"对应产品："+ omap.get("D") +" 无可用库存；";
+						 }
+						 if(amount == 0 && lockAmount > 0){
+							 sMsgTemp += "&#9;T单元格，"+ omap.get("T") +"对应产品："+ omap.get("D") +" 已全部被锁定；";
+						 }
+					 }else{
+						 sMsgTemp += "&#9;T单元格，'"+ omap.get("T") +"'对应产品：'"+ omap.get("D") +"' 无可用库存；";
+					 }
+				}
+				if(StringUtils.isEmpty(T)){
+					if(StringUtils.isEmpty(expressageId)){
+						sMsgTemp += "&#9;T单元格，物流商对应库存产品："+ omap.get("D") +"无可用库存或者被锁定；";
+					}else{
+						T = expressageId;
+					}
+				}
+				String U = omap.get("U");
+				if ("促销单".equals(U)) {
+					U = "促销单";
+				}
+				else {
+					U = "配送单";
+				}
+				String V = omap.get("V");
+				if (StringUtils.isBlank(V)) {
+					sMsgTemp += "&#9;V单元格，客户号码不能为空；";
+				}
+				else {
+					if (StringUtils.isNotEmpty(F)) {
+					Map<String, String> oScheme = new OrderDao().getSchemePayAndMore(F,D);		//检查营销方案是否要求鉴别目标号码
+						if(oScheme == null){
+							sMsgTemp = sMsgTemp + "&#9;V单元格，产品［" + ((String)omap.get("D")) + "］对应的营销方案［" + ((String)omap.get("F")) + "］不存在；";
+						}else{
+							String checkAimNo = StringUtil.toString(oScheme.get("checkAimNo"));
+							if ("Y".equals(checkAimNo)) {		//如果营销方案需要鉴别目标号码时
+								if (!new OrderDao().validateRight(F, V)) {
+									sMsgTemp += "&#9;V单元格，客户号码不是营销方案的目标号码；";
+								}else{
+//									//如果产品子类型为：信息机、TD上网卡 不需要15天限制
+//									if(!"信息机".equals(omap.get("C")) && !"TD上网卡".equals(omap.get("C"))){
+//										int num = new OrderDao().isNotOrder(V);
+//										if(num != -1){
+//											if(num <= 15){
+//												sMsgTemp += "&#9;V单元格，"+ V +":该客户号码已经下了订单，距上次下订单时间为："+ num +"天;\n请在15天之后在下订单！；";
+//											}
+//										}
+//									}
+									/**
+							         * 根据设置产品频次来控制每个用户下订数量
+							         */
+									if(StringUtils.isNotEmpty(C) && StringUtils.isNotEmpty(D) && StringUtils.isNotEmpty(V)){
+										DynaBean param = new LazyDynaBean();
+										param.set("type2", C);
+										param.set("product", D);
+										param.set("clientNo", V);
+										String oTemp = StringUtil.toString(OrderDao.getProductFrequency(param),"");
+										if(StringUtils.isNotEmpty(oTemp)){
+											sMsgTemp += "&#9;V单元格，"+oTemp;
+										}
+									}
+								}
+							}else{
+//								if(!"信息机".equals(omap.get("C")) && !"TD上网卡".equals(omap.get("C"))){
+//									int num = new OrderDao().isNotOrder(V);
+//									if(num != -1){
+//										if(num <= 15){
+//											sMsgTemp += "&#9;V单元格，"+ V +":该客户号码已经下了订单，距上次下订单时间为："+ num +"天;\n请在15天之后在下订单！；";
+//										}
+//									}
+//								}
+								 /**
+						         * 根据设置产品频次来控制每个用户下订数量
+						         */
+								if(StringUtils.isNotEmpty(C) && StringUtils.isNotEmpty(D) && StringUtils.isNotEmpty(V)){
+									DynaBean param = new LazyDynaBean();
+									param.set("type2", C);
+									param.set("product", D);
+									param.set("clientNo", V);
+									String oTemp = StringUtil.toString(OrderDao.getProductFrequency(param),"");
+									if(StringUtils.isNotEmpty(oTemp)){
+										sMsgTemp += "&#9;V单元格，"+oTemp;
+									}
+								}
+							}
+							
+							/**
+					         * 20704客服接口判断 lijunjun 2012-05-24
+					         */
+							boolean clientNoScheme = SchemeBossValidate.validate(V, F);
+							if(!clientNoScheme){
+								sMsgTemp = sMsgTemp + "&#9;V单元格，客户号码："+V+",不可办理对应的营销方案［" + F + "］";
+							}
+						}
+					}
+				}
+				String W = StringUtil.toString(omap.get("W"),"");
+				if (StringUtils.isNotEmpty(W)) {
+					W = getProject(W);
+					if(StringUtils.isEmpty(W)){
+						sMsgTemp += "&#9;W单元格，项目名称不存在；";
+					}
+				}
+				String X = StringUtil.toString(omap.get("X"),"");
+				if (StringUtils.isNotEmpty(X)) {
+					X= getPartners(X);
+					if(StringUtils.isEmpty(X)){
+						sMsgTemp += "&#9;X单元格，合作商不存在；";
+					}
+				}
+				if (StringUtils.isEmpty(sMsgTemp)) {
+					oPstmt.setString(1, A);					//分公司
+					oPstmt.setString(2, B);					//产品类型
+					oPstmt.setString(3, C);					//子类型
+					oPstmt.setString(4, D);					//产品id
+					oPstmt.setString(5, E.toUpperCase());	//序列号
+					oPstmt.setString(6, F);		//营销方案
+					oPstmt.setString(7, omap.get("G"));		//新购号码
+					oPstmt.setString(8, omap.get("H"));		//信息机套餐
+					oPstmt.setString(9, omap.get("I"));		//捆绑业务
+					oPstmt.setString(10, omap.get("J"));	//捆绑业务2
+					oPstmt.setString(11, K);		//付款金额
+					oPstmt.setString(12, L);		//付款方式
+					oPstmt.setString(13, M);		//联系电话
+					oPstmt.setString(14, N);		//机主姓名
+					oPstmt.setString(15, O);		//证件类型
+					oPstmt.setString(16, P);		//证件号码
+					oPstmt.setString(17, Q);		//区域
+					oPstmt.setString(18, R);		//详细地址
+					oPstmt.setString(19, S);		//邮政编码omap.get("X")omap.get("X")
+					oPstmt.setString(20, T);
+					oPstmt.setString(21, U);		//订单类型
+					oPstmt.setString(22, V);		//V客户号码
+					oPstmt.setString(23, omap.get("Z"));		//备注
+					oPstmt.setString(24, id);
+					oPstmt.setString(25, creatTime);	//创建时间
+					oPstmt.setString(26, sUserId);		//创建人
+					oPstmt.setString(27, sNickName);	//
+					oPstmt.setString(28, "未提交");		//状态
+					oPstmt.setString(29, omap.get("Y"));		//推荐人
+					oPstmt.setString(30, X);		//合作商
+					oPstmt.setString(31, W);		//项目名称
+					oPstmt.setString(32, "");		//订单最终状态
+					oPstmt.executeUpdate();
+
+					oPstmtLog.setString(1, id);
+					oPstmtLog.setString(2, creatTime);
+					oPstmtLog.setString(3, sNickName);
+					oPstmtLog.setString(4, "通过批量导入新建");
+					oPstmtLog.executeUpdate();
+
+					oUpdateProduct.setString(1, D);		//更新产品可用剩余数量
+					oUpdateProduct.executeUpdate();
+
+					oPstmtInsertProductAmountLog.setString(1, D);			//产品id
+					oPstmtInsertProductAmountLog.setString(2, creatTime);
+					oPstmtInsertProductAmountLog.setString(3, sNickName);
+					oPstmtInsertProductAmountLog.setString(4, "-");
+					oPstmtInsertProductAmountLog.setInt(5, nAmount);
+					oPstmtInsertProductAmountLog.setInt(6, nAmount-1);
+					oPstmtInsertProductAmountLog.setInt(7, 1);
+					oPstmtInsertProductAmountLog.setString(8, id);
+					oPstmtInsertProductAmountLog.setString(9, "通过批量导入订单占用一个剩余库存");
+					oPstmtInsertProductAmountLog.executeUpdate();
+
+					updateProductLock.setString(1, T);
+					updateProductLock.setString(2, C);
+					updateProductLock.setString(3, D);
+					updateProductLock.executeUpdate();
+
+					con.commit();
+					success++;		//成功数+1
+				}
+				else {
+					setSMSG("<p>第 " + (i +2) + " 行: " + sMsgTemp + "</p>");		//设置提示消息
+					failure++;		//失败数+1
+				}
+			}
+		}
+		catch(Exception ex) {
+			con.rollback();
+			ex.printStackTrace();
+		}
+		finally {
+			try {
+				if (oPstmt != null) {
+					oPstmt.close();
+				}
+				if (oPstmtLog != null) {
+					oPstmtLog.close();
+				}
+				if (oUpdateProduct != null) {
+					oUpdateProduct.close();
+				}
+				if (oPstmtInsertProductAmountLog != null) {
+					oPstmtInsertProductAmountLog.close();
+				}
+				if (updateProductLock != null) {
+					updateProductLock.close();
+				}
+				connMgr.freeConnection(POOL, con);
+				connMgr.release();
+			} catch (Exception e) {
+				e.getMessage();
+			}
+		}
+		return new int[] {success, failure};
+	}
+
+	/**
+	 * 获取区域的id
+	 */
+	protected String getEreaId(String erea) {
+		if (StringUtils.isEmpty(erea) || (aEreaList == null && aEreaList.size() < 1)) {
+			return null;
+		}
+		else {
+			String id = null;
+			DynaBean bean = null;
+			for (int i=0; i<aEreaList.size(); i++) {
+				bean = aEreaList.get(i);
+				String name = StringUtil.toString(bean.get("name"));
+				if (erea.equals(name)) {
+					id = StringUtil.toString(bean.get("id"));
+				}
+			}
+			return id;
+		}
+	}
+	/**
+	 * 获取产品类型的id
+	 * @param parentType
+	 * @param type
+	 * @return
+	 */
+	protected String getType(String parentType, String type) {
+		if (StringUtils.isEmpty(type) || (aTypeList == null && aTypeList.size() < 1)) {
+			return null;
+		}
+		else {
+			String id = null;
+			DynaBean bean = null;
+			for (int i=0; i<aTypeList.size(); i++) {
+				bean = aTypeList.get(i);
+				String name = StringUtil.toString(bean.get("name"));
+				if (type.equals(name)) {
+					id = StringUtil.toString(bean.get("id"));
+				}
+			}
+			return id;
+		}
+	}
+
+	/**
+	 * 获取产品ID
+	 * @param product
+	 * @return
+	 */
+	protected Map<String,String> getProductId(String product) {
+		if (StringUtils.isEmpty(product) || (aProductList == null && aProductList.size() < 1)) {
+			return null;
+		}
+		else {
+			Map<String,String> products = new HashMap<String,String>();
+			product = product.replaceAll("-", "－");		//替换所有的E文-为中文全角－
+			DynaBean bean = null;
+			for (int i=0; i<aProductList.size(); i++) {
+				bean = aProductList.get(i);
+				String name = StringUtil.toString(bean.get("name"));
+				if (product.trim().equals(name)) {
+					String id = StringUtil.toString(bean.get("id"));
+					String typeId = StringUtil.toString(bean.get("typeID"));
+					products.put("id", id);
+					products.put("typeId", typeId);
+				}
+
+			}
+			return products;
+		}
+	}
+
+	/**
+	 * 查询营销方案id
+	 * @param sScheme
+	 * @return
+	 */
+	protected String getSchemeId(String sScheme) {
+		if (StringUtils.isEmpty(sScheme) || (aSchemeList == null && aSchemeList.size() < 1)) {
+			return null;
+		}
+		else {
+			String id = null;
+			DynaBean bean = null;
+			for (int i=0; i<aSchemeList.size(); i++) {
+				bean = aSchemeList.get(i);
+				String name = StringUtil.toString(bean.get("name"));
+				if (sScheme.equals(name)) {
+					id = StringUtil.toString(bean.get("id"));
+				}
+			}
+			return id;
+		}
+	}
+
+	/**
+	 * 查询物流商id
+	 * @param expressage
+	 * @return
+	 */
+	protected String getExpressage(String expressage) {
+		if (StringUtils.isEmpty(expressage) || (aExpressageList == null && aExpressageList.size() < 1)) {
+			return null;
+		}
+		else {
+			String id = null;
+			DynaBean bean = null;
+			for (int i=0; i<aExpressageList.size(); i++) {
+				bean = aExpressageList.get(i);
+				String name = StringUtil.toString(bean.get("name"));
+				if (expressage.equals(name)) {
+					id = StringUtil.toString(bean.get("id"));
+				}
+			}
+			return id;
+		}
+	}
+
+	/**
+	 * 合作商id
+	 * @param partners_id
+	 * @return
+	 */
+	protected String getPartners(String partners) {
+		if (StringUtils.isEmpty(partners) || (partnersList == null && partnersList.size() < 1)) {
+			return null;
+		}
+		else {
+			String partners_id = null;
+			DynaBean bean = null;
+			for (int i=0; i<partnersList.size(); i++) {
+				bean = partnersList.get(i);
+				String name = StringUtil.toString(bean.get("partners_name"));
+				if (partners.equals(name)) {
+					partners_id = StringUtil.toString(bean.get("partners_id"));
+				}
+			}
+			return partners_id;
+		}
+	}
+
+	/**
+	 * 项目名称
+	 * @param proj_id
+	 * @return
+	 */
+	protected String getProject(String projectName) {
+		if (StringUtils.isEmpty(projectName) || (projectList == null && projectList.size() < 1)) {
+			return null;
+		}
+		else {
+			String proj_id = null;
+			DynaBean bean = null;
+			for (int i=0; i<projectList.size(); i++) {
+				bean = projectList.get(i);
+				String name = StringUtil.toString(bean.get("name"));
+				if (projectName.equals(name)) {
+					proj_id = StringUtil.toString(bean.get("proj_id"));
+				}
+			}
+			return proj_id;
+		}
+	}
+	/**
+	 * 获得数据字典内容
+	 * @param type		字典类型
+	 * @param values_	值
+	 * @return
+	 */
+	protected boolean getDictionaryId(String type, String values_) {
+		if (StringUtils.isEmpty(type) || (aDictionaryList == null && aDictionaryList.size() < 1)) {
+			return false;
+		}
+		else {
+			String id = null;
+			DynaBean bean = null;
+			for (int i=0; i<aDictionaryList.size(); i++) {
+				bean = aDictionaryList.get(i);
+				String values_2 = StringUtil.toString(bean.get("values_"));
+				String type2 = StringUtil.toString(bean.get("type"));
+				if (null != values_ && null != type && values_.equals(values_2) && type2.equals(type)) {
+					id = StringUtil.toString(bean.get("id"));
+				}
+			}
+			return StringUtils.isNotEmpty(id);	//如果数据字典中有该值则为允许范围的
+		}
+	}
+
+	/**
+	 * 获取序列号的对应库存
+	 * @param sNo_
+	 * @return
+	 */
+	protected String getStorageId(String sNo_) {
+		StringBuffer sSql = new StringBuffer();
+		sSql.append(" SELECT top 1 id	\n");
+		sSql.append(" FROM st_storage st	\n");
+		sSql.append(" WHERE 1=1	\n");
+		sSql.append(" AND st.state='已上架'	\n");
+		sSql.append(" AND st.no_='" + StringUtil.toString(sNo_) + "'	\n");
+
+		List<DynaBean> list = JdbcUtil.query(sSql.toString());
+		String sId = null;
+		if (list != null && list.size() >= 1) {
+			DynaBean oBean = list.get(0);
+			sId = StringUtil.toString(oBean.get("id"), null);
+		}
+		return sId;
+	}
+
+	public static void main(String[] args) {
+	}
+
+	public List<DynaBean> getStorageId(Map<String,String> oParam){
+		String type1 = oParam.get("type1");
+		String type2 = oParam.get("type2");
+		String productId = oParam.get("productId");
+		String no = oParam.get("no");
+		StringBuffer oSql = new StringBuffer();
+		oSql.append("SELECT Top 1 ta.no_ AS no,ta.ID,ta.type1,ta.type2,ta.productId from st_storage ta \n");
+		oSql.append("LEFT JOIN st_type t1 ON ta.type1=t1.id \n");
+		oSql.append("LEFT JOIN st_type t2 ON ta.type2=t2.id \n");
+		oSql.append("LEFT JOIN st_product tp ON ta.productID=tp.id \n");
+		oSql.append(" where 1=1 \n");
+		if (StringUtils.isNotEmpty(type1)) {
+			oSql.append(" AND ta.type1='").append(type1).append("'	\n");
+		}
+		if (StringUtils.isNotEmpty(type2)) {
+			oSql.append(" AND ta.type2='").append(type2).append("'	\n");
+		}
+		if (StringUtils.isNotEmpty(productId)) {
+			oSql.append(" AND ta.productID='").append(productId).append("'	\n");
+		}
+		if (StringUtils.isNotEmpty(no)) {
+			oSql.append(" AND ta.no_='").append(no).append("'	\n");
+		}
+		if(StringUtils.isEmpty(type1) || StringUtils.isEmpty(type2) || StringUtils.isEmpty(productId)){
+			return null;
+		}
+		oSql.append(" AND ta.state='已上架' order by ta.creattime");
+//		System.out.println(oSql.toString());
+		ResultSet oResultSet = null;
+		List<DynaBean> aResultList = null;		//返回的结果集
+		try{
+			info(oSql.toString());
+			oResultSet = EMPBusiness.getRecordsBySql(oSql.toString(), "");
+			aResultList = JdbcUtil.toList(oResultSet);
+		}catch(Exception oEx){
+			info("查询库存序列号失败！" + oEx.getMessage());
+			oEx.printStackTrace();
+		}
+		finally {
+			EMPBusiness.close(oResultSet, POOL);
+		}
+		return aResultList;
+	}
+}
