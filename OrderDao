@@ -1,0 +1,1642 @@
+package storage.orderForm.dao;
+
+import java.io.InputStream;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.text.ParseException;
+import java.text.SimpleDateFormat;
+import java.util.Calendar;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Properties;
+import org.apache.commons.beanutils.DynaBean;
+import org.apache.commons.lang.StringUtils;
+import storage.orderForm.OrderFormDictionary;
+import storage.util.BaseDao;
+import storage.util.JdbcUtil;
+import storage.util.StringUtil;
+import work.common.EMPBusiness;
+import work.common.EMPCommInfo;
+import work.common.EMPSequence;
+
+import com.common.DBConnectionManager;
+import com.common.Tools;
+import distrib.sms.HTTPConnect;
+
+/**
+ * 订单数据库操作
+ * @author zhongzy
+ * @时间  2011-4-25 下午03:36:08
+ */
+public class OrderDao extends BaseDao {
+  public OrderDao() {
+		super(OrderDao.class);
+	}
+	/**
+	 * 添加订单
+	 * @return
+	 */
+	public int addOrder(DynaBean order) {
+		if (order == null) {
+			return -1;
+		}
+		DBConnectionManager connMgr = DBConnectionManager.getInstance();
+		Connection con = connMgr.getConnection(POOL);
+		Statement st = null;		//订单插入预编译语句
+		PreparedStatement oPstmtLog = null;		//订单日志插入预编译语句
+		PreparedStatement oPstmtUpdateProduct = null;
+		PreparedStatement oPstmtUpdateProductLock = null;//产品锁定预编译
+
+		//各字段值
+		String id = Tools.getUUID();
+		String company = StringUtils.defaultIfEmpty((String)order.get("company"), "");
+		String type1 = StringUtils.defaultIfEmpty((String)order.get("type1"), "");
+		String type2 = StringUtils.defaultIfEmpty((String)order.get("type2"), "");
+		String product = StringUtils.defaultIfEmpty((String)order.get("product"), "");
+		String scheme = StringUtils.defaultIfEmpty((String)order.get("scheme"), "");
+		String newNo = StringUtils.defaultIfEmpty((String)order.get("newNo"), "");
+		String newsSeries = StringUtils.defaultIfEmpty((String)order.get("newsSeries"), "");
+		String operation1 = StringUtils.defaultIfEmpty((String)order.get("operation1"), "");
+		String operation2 = StringUtils.defaultIfEmpty((String)order.get("operation2"), "");
+		String payMoney = StringUtils.defaultIfEmpty((String)order.get("payMoney"), "");
+		String payMode = StringUtils.defaultIfEmpty((String)order.get("payMode"), "");
+		String phone = StringUtils.defaultIfEmpty((String)order.get("phone"), "");
+		String owner = StringUtils.defaultIfEmpty((String)order.get("owner"), "");
+		String certificate = StringUtils.defaultIfEmpty((String)order.get("certificate"), "");
+		String certificateNo = StringUtils.defaultIfEmpty((String)order.get("certificateNo"), "");
+		String erea = StringUtils.defaultIfEmpty((String)order.get("erea"), "");
+		String address = StringUtil.toString(order.get("address"));
+		String postalcode = StringUtils.defaultIfEmpty((String)order.get("postalcode"), "");
+		String expressage = StringUtils.defaultIfEmpty((String)order.get("expressage"), "");
+		String clientNo = StringUtils.defaultIfEmpty((String)order.get("clientNo"), "");
+		String type = StringUtils.defaultIfEmpty((String)order.get("type"), "");
+		String creatTime = Tools.getCurrDateTime();
+		String creatBy = StringUtils.defaultIfEmpty((String)order.get("creatBy"), "");
+		String creatName = StringUtils.defaultIfEmpty((String)order.get("creatName"), "");
+		String state = StringUtils.defaultIfEmpty((String)order.get("state"), "");
+		state = OrderFormDictionary.getStateValue(state);
+		String reason = StringUtils.defaultIfEmpty((String)order.get("reason"), "");
+		String remart = StringUtil.toString(order.get("remart"), "");
+		String serialNo = StringUtil.toString(order.get("serialNo"));
+		String commend = StringUtils.defaultIfEmpty((String)order.get("commend"), ""); //推荐人
+		String partners = StringUtils.defaultIfEmpty((String)order.get("partners"), ""); //合作商
+		String projectName = StringUtils.defaultIfEmpty((String)order.get("projectName"), ""); //项目名称
+		StringBuffer sql = new StringBuffer();
+		sql.append("INSERT INTO st_orderForm	\n");
+		sql.append("(ID, company, type1, type2, product, scheme, newNo, newsSeries, operation1, operation2, payMoney, 	\n");
+		sql.append(" payMode, phone, owner, certificate, certificateNo, erea, address, postalcode, expressage, clientNo, 	\n");
+		sql.append(" type, creatTime, creatBy,creatName, state, reason, remart, serialNo,commend, changeTime, partners, projectName,orderResult)  \n");
+		sql.append("VALUES(");
+		sql.append("'" + id + "', ").append("'" + company + "', ").append("'" + type1 + "', \n");
+		sql.append("'" + type2 + "', ").append("'" + product + "', ").append("'" + scheme + "', \n");
+		sql.append("'" + newNo + "', ").append("'" + newsSeries + "', ").append("'" + operation1 + "', \n");
+		sql.append("'" + operation2 + "', ").append("" + payMoney + ", ").append("'" + payMode + "', \n");
+		sql.append("'" + phone + "', ").append("'" + owner + "', ").append("'" + certificate + "', \n");
+		sql.append("'" + certificateNo + "', ").append("'" + erea + "', ").append("'" + StringUtil.filtrateIllegal(address) + "', \n");
+		sql.append("'" + postalcode + "', ").append("'" + expressage + "', ").append("'" + clientNo + "', \n");
+		sql.append("'" + type + "', ").append("'" + creatTime + "', ").append("'" + creatBy + "', \n");
+		sql.append("'" + creatName + "', ").append("'" + state + "', ").append("'" + reason + "', \n");
+		sql.append("'" + StringUtil.filtrateIllegal(remart) + "', '" + serialNo + "','"+ commend +"', '" + creatTime + "',");
+		sql.append("'"+ partners +"','"+ projectName +"','')");
+		int nResult = 1000;
+		String sLogSql = "INSERT INTO st_orderLog(orderId, creatTime, creatBy, action) VALUES(?, ?, ?, ?)";
+		String sAmount = StringUtil.toString(order.get("nAmount"), "0");
+		int nAmount = Integer.parseInt(sAmount);
+		String sUpdateProduct = "UPDATE st_product SET amount=amount-1 WHERE id=?";
+
+		String updateProductLock = "UPDATE st_product_lock set amount=amount-1 where expressage=? AND productID=? AND type2=?";
+
+		try {
+
+			//==============修改：2011-08-19==author:luoyw=================
+			con.setAutoCommit(false);
+
+			info(sql.toString());
+			st = con.createStatement();
+			oPstmtLog = con.prepareStatement(sLogSql);
+			oPstmtUpdateProduct = con.prepareStatement(sUpdateProduct);
+
+			oPstmtUpdateProductLock = con.prepareStatement(updateProductLock);
+
+			st.executeUpdate(sql.toString());
+
+			String action = "新建并提交";
+			if ("未提交".equals(state)) {
+				action = "新建";
+			}
+
+			oPstmtLog.setString(1, id);  //添加日志
+			oPstmtLog.setString(2, creatTime);
+			oPstmtLog.setString(3, creatName);
+			oPstmtLog.setString(4, action);
+			oPstmtLog.executeUpdate();
+
+			//==============================================================
+
+			oPstmtUpdateProduct.setString(1, product);
+			oPstmtUpdateProduct.executeUpdate();
+
+			oPstmtUpdateProductLock.setString(1, expressage);
+			oPstmtUpdateProductLock.setString(2, product);
+			oPstmtUpdateProductLock.setString(3, type2);
+			oPstmtUpdateProductLock.executeUpdate();
+
+
+			con.commit();
+
+		}catch(SQLException e){
+			nResult = -1;
+			try {
+				con.rollback();
+			} catch (SQLException e1) {
+				System.out.println(e1.getMessage());
+			}
+			e.printStackTrace();
+		}catch (Exception e) {
+			nResult = -1;
+			e.printStackTrace();
+			EMPCommInfo.writeServerLog("添加订单失败!" + e.getMessage());
+		}finally{
+			try {
+				if (st != null) {
+					st.close();
+				}
+				if (oPstmtLog != null) {
+					oPstmtLog.close();
+				}
+				if (oPstmtUpdateProduct != null) {
+					oPstmtUpdateProduct.close();
+				}
+				if (oPstmtUpdateProductLock != null) {
+					oPstmtUpdateProductLock.close();
+				}
+			}catch(SQLException e){
+				e.printStackTrace();
+			}
+		}
+		if (nResult > 0) {
+			DataBaseDao baseDao = new DataBaseDao();
+			baseDao.insertProductAmountLog(product, creatTime, creatName, '-', nAmount, 1, id, "新增订单占用一个库存数");
+		}
+		return nResult;
+	}
+
+	/*
+	 * 判断用户号码是否在15天内下过订单，如果下过就不准在15天中在下订单
+	 * clientNo 用户号码
+	 */
+	public int isNotOrder(String clientNo){
+		StringBuffer sql_order = new StringBuffer();
+		sql_order.append("SELECT datediff(day,(SELECT TOP 1 o.creatTime FROM st_orderForm o \n");
+		sql_order.append(" LEFT JOIN st_type t1 ON t1.id=o.type2 \n");
+		if("".equals(clientNo)){
+			return -1;
+		}
+		int result = 0;
+		sql_order.append(" WHERE o.clientNo = '"+ clientNo +"'");
+		sql_order.append(" AND o.state not in ('删除','配送成功','配送失败','取消配送','促销成功','促销失败')");
+		sql_order.append(" AND t1.name not in('信息机','TD上网卡')");
+		sql_order.append(" order by o.creatTime desc ");
+		sql_order.append(" ),getdate()) as timeGap ");
+//		System.out.println(sql_order.toString());
+		ResultSet oResultSet = null;
+		try{
+			int i = 0;
+			String timeGap = "";
+			info(sql_order.toString());
+			oResultSet = EMPBusiness.getRecordsBySql(sql_order.toString(), "");
+			while(oResultSet.next()){
+				timeGap = oResultSet.getString("timeGap");
+				i++;
+				if(i == 1){
+					break;
+				}
+			}
+			if("".equals(timeGap) || timeGap == null){
+				result = 1000;
+			}else{
+				result = Integer.parseInt(timeGap);
+			}
+		}catch(Exception oEx){
+			result = -1;
+			info("查询订单数据失败！" + oEx.getMessage());
+			oEx.printStackTrace();
+		}
+		finally {
+			EMPBusiness.close(oResultSet, POOL);
+		}
+		return result;
+	}
+	/**
+	 * 批量导入数据
+	 * @param aExcelData	excel数据
+	 * @param sUserId		导入人id
+	 * @param sNickName		导入人nickname
+	 * @return String[]{0:成功记录数, 1:失败记录数, 错误提示消息}
+	 * @throws SQLException
+	 */
+	public String[] batchImportOrder(List<String[]> aExcelData, String sUserId, String sNickName) throws SQLException {
+		int success = 0, failure = 0;
+		String sMsg = "";
+		if (aExcelData != null && aExcelData.size() >= 1) {
+			BatchImportOrder oBio = new BatchImportOrder();
+			int[] rows = oBio.checkExcel(aExcelData, sUserId, sNickName);
+			success = rows[0];
+			failure = rows[1];
+			if (failure >= 1) {
+				sMsg = oBio.getSMSG();
+			}
+		}
+		return new String[]{String.valueOf(success), String.valueOf(failure), sMsg};
+	}
+
+	/**
+	 * 查询订单列表数据
+	 * @param param 查询条件
+	 * @param bExportFlag 导出Excel标记
+	 * @return
+	 */
+	public List<DynaBean> queryOrderList(Map<String, String> oParam, boolean bExportFlag) {
+		StringBuffer oSql = new StringBuffer();
+		String sCondition = getCondition(oParam);		//附加查询条件
+		int currentPage = new Integer(StringUtil.toString(oParam.get("currentPage"), "1"));
+		if (bExportFlag) {
+			oSql.append(" SELECT \n");
+		}
+		else {
+			oSql.append(" SELECT TOP 50	\n");
+		}
+		oSql.append("	ta.id, terea.name AS company, ISNULL(t1.name,'') AS type1, ISNULL(t2.name,'') AS  type2,	\n");
+		oSql.append("	ISNULL((tp.name + '－' + tp.model + '－' + tp.color),'') AS product, ta.serialNo,\n");
+		oSql.append("	ISNULL(tscheme.schemeFlag,'') AS schemeFlag,ISNULL(tscheme.name,'') AS scheme,	newNo, newsSeries, operation1,	\n");
+		oSql.append("	ISNULL(buyPrice,'0') AS buyPrice,ISNULL(backPrice,'0') AS backPrice,operation2, payMoney, payMode,	\n");
+		oSql.append("	ta.phone, owner, certificate, certificateNo,	\n");
+		oSql.append("	ISNULL(terea2.name,'') AS erea, ta.address, postalcode, ISNULL(tex.name,'') AS expressage,	\n");
+		oSql.append("	clientNo, ta.type, ta.creatTime,ta.changeTime, ta.creatBy,	\n");
+		oSql.append("	(CASE	\n");
+		oSql.append("		WHEN DATALENGTH(reason)>16 THEN SUBSTRING(ISNULL(reason,''),0,16)+'...'	\n");
+		oSql.append("		WHEN DATALENGTH(reason)<16 THEN reason	\n");
+		oSql.append("		ELSE ISNULL(reason, '') END) AS shortReason,	\n");
+        oSql.append("	ISNULL(ta.remart,'') AS remart, ta.state, ISNULL(ta.reason,'') AS reason, creatName, \n");
+		oSql.append("   DATEDIFF(hh , convert(datetime, ta.changeTime), getdate()) AS overtime, ISNULL(ta.commend,'') AS commend, \n");
+		oSql.append(" ta.orderResult,ISNULL(u.user_name,'') AS user_name,ISNULL(d.dept_name,'') AS dept_name, ISNULL(ta.usim,'') usim,  \n");
+		oSql.append("	DATEDIFF(dd, convert(datetime,ta.creattime),convert(datetime,ta.changetime)) AS orderDate,ISNULL(ta.changeTime,'') as changeTime, \n");
+		oSql.append("   ISNULL(ta.expressNo,'')AS expressNo, ta.expressState, ISNULL(spn.partners_name,'') AS partnersName, ISNULL(wpj.name,'') AS projectName, \n");
+		oSql.append("   ISNULL(ol.creatTime,'') AS distribSuccessTime, \n");
+		oSql.append("   ISNULL(ol2.creatTime,'') AS approvedSuccessTime \n");
+		oSql.append(" FROM st_orderForm ta	\n");
+		oSql.append("	LEFT JOIN st_erea terea ON ta.company=terea.id	\n");		//关联地区表查询出分公司
+		oSql.append("	LEFT JOIN st_type t1 ON ta.type1=t1.id	\n");				//关联类型表查询出类型
+		oSql.append("	LEFT JOIN st_type t2 ON ta.type2=t2.id	\n");
+		oSql.append("	LEFT JOIN st_product tp ON ta.product=tp.id	\n");			//关联产品表查询出产品信息
+		oSql.append("	LEFT JOIN st_scheme tscheme ON ta.scheme=tscheme.id	\n");	//关联营销方案查询出方案名称
+		oSql.append("	LEFT JOIN st_erea terea2 ON ta.erea=terea2.id	\n");		//关联地区表查询出区域
+		oSql.append("	LEFT JOIN st_expressage tex ON ta.expressage=tex.id	\n");	//关联物流商
+		oSql.append(" LEFT JOIN ts_user u ON ta.creatBy=u.user_id \n");
+		oSql.append(" LEFT JOIN ts_dept d ON d.dept_id=u.dpid");
+		oSql.append(" LEFT JOIN st_partners spn ON spn.partners_id=ta.partners \n");
+		oSql.append(" LEFT JOIN wp_project wpj ON wpj.proj_id=ta.projectName \n");
+		oSql.append(" LEFT JOIN st_orderLog ol ON ta.id=ol.orderId AND ol.action like '%配送成功%' \n");
+		oSql.append(" LEFT JOIN st_orderLog ol2 ON ta.id=ol2.orderId AND ol2.action like '%审核通过%' \n");
+		oSql.append("");
+		oSql.append(" WHERE 1=1	\n");
+		if (!bExportFlag) {
+			oSql.append(" 	AND	ta.id NOT IN (		\n");
+			oSql.append(" 	SELECT TOP " +((currentPage - 1) * 50) + " id FROM st_orderForm ta WHERE 1=1	\n" + sCondition + " ORDER BY creatTime DESC)");
+		}
+		oSql.append(sCondition);
+		
+		// 配送成功时间 lijunjun 2012-07-24
+		String distribSuccessStartTime = oParam.get("distribSuccessStartTime");
+		String distribSuccessEndTime = oParam.get("distribSuccessEndTime");
+		if (StringUtils.isNotEmpty(distribSuccessStartTime)) {
+			oSql.append(" AND ol.creatTime>='").append(distribSuccessStartTime).append("'	\n");
+		}
+		if (StringUtils.isNotEmpty(distribSuccessEndTime)) {
+			oSql.append(" AND ol.creatTime<='").append(distribSuccessEndTime).append("'	\n");
+		}
+		
+		oSql.append(" ORDER BY ta.creatTime DESC");
+		System.out.println("查询订单列表数据sql:"+oSql.toString());
+		ResultSet oResultSet = null;
+		List<DynaBean> aResultList = null;		//返回的结果集
+		try {
+			info(oSql.toString());
+			oResultSet = EMPBusiness.getRecordsBySql(oSql.toString(), POOL);
+			aResultList = JdbcUtil.toList(oResultSet);
+		}
+		catch(Exception oEx) {
+			info("查询订单列表数据失败！" + oEx.getMessage());
+			oEx.printStackTrace();
+		}
+		finally {
+			EMPBusiness.close(oResultSet, POOL);
+		}
+		return aResultList;
+	}
+
+	/**
+	 * 查询订单的记录数
+	 * @param param
+	 * @return
+	 */
+	public int getOrderCount(Map<String, String> oParam) {
+		StringBuffer oSql = new StringBuffer();
+		oSql.append("SELECT COUNT(1) FROM st_orderForm ta \n");
+		oSql.append(" LEFT JOIN st_erea terea ON ta.company=terea.id	\n");		//关联地区表查询出分公司
+		oSql.append(" LEFT JOIN st_type t1 ON ta.type1=t1.id	\n");				//关联类型表查询出类型
+		oSql.append(" LEFT JOIN st_type t2 ON ta.type2=t2.id	\n");
+		oSql.append(" LEFT JOIN st_product tp ON ta.product=tp.id	\n");			//关联产品表查询出产品信息
+		oSql.append(" LEFT JOIN st_scheme tscheme ON ta.scheme=tscheme.id	\n");	//关联营销方案查询出方案名称
+		oSql.append(" LEFT JOIN st_erea terea2 ON ta.erea=terea2.id	\n");		//关联地区表查询出区域
+		oSql.append(" LEFT JOIN st_expressage tex ON ta.expressage=tex.id	\n");	//关联物流商
+		oSql.append(" LEFT JOIN ts_user u ON ta.creatBy=u.user_id \n");
+		oSql.append(" LEFT JOIN ts_dept d ON d.dept_id=u.dpid");
+		oSql.append(" LEFT JOIN st_partners spn ON spn.partners_id=ta.partners \n");
+		oSql.append(" LEFT JOIN wp_project wpj ON wpj.proj_id=ta.projectName \n");
+		oSql.append(" LEFT JOIN st_orderLog ol ON ta.id=ol.orderId AND ol.action like '%配送成功%' \n");
+		oSql.append(" LEFT JOIN st_orderLog ol2 ON ta.id=ol2.orderId AND ol2.action like '%审核通过%' \n");
+		oSql.append(" WHERE 1=1 \n");
+		oSql.append(getCondition(oParam));
+		// 配送成功时间 lijunjun 2012-07-24
+		String distribSuccessStartTime = oParam.get("distribSuccessStartTime");
+		String distribSuccessEndTime = oParam.get("distribSuccessEndTime");
+		if (StringUtils.isNotEmpty(distribSuccessStartTime)) {
+			oSql.append(" AND ol.creatTime>='").append(distribSuccessStartTime).append("'	\n");
+		}
+		if (StringUtils.isNotEmpty(distribSuccessEndTime)) {
+			oSql.append(" AND ol.creatTime<='").append(distribSuccessEndTime).append("'	\n");
+		}
+		
+//		System.out.println(oSql.toString());
+		int nCount = 0;
+		try {
+			info(oSql.toString());
+			nCount = EMPBusiness.getRecordCount(oSql.toString(), "");
+		}
+		catch (Exception oEx) {
+			info("查询订单记录数失败！" + oEx.getMessage());
+			oEx.printStackTrace();
+		}
+		return nCount;
+	}
+
+	/**
+	 * 获取附加查询条件
+	 * @param oParam
+	 * @return
+	 */
+	private String getCondition(Map<String, String> oParam) {
+		StringBuffer sCondition = new StringBuffer();
+		String sState = oParam.get("state");
+		String sCompany = oParam.get("company");	//分公司
+		String sType1 = oParam.get("type1");		//类型
+		String sType2 =  oParam.get("type2");		//子类
+		String sProduct =  oParam.get("product");	//产品
+		String sScheme =  oParam.get("scheme");		//营销方案编码
+		String sStartTime =  oParam.get("startTime");	//开始时间
+		String sEndTime =  oParam.get("endTime");		//结束时间
+		String sClickNo = oParam.get("clickNo");   //客户号码
+		String sExpressage = oParam.get("expressage");   //物流商
+		String sExpressNo = oParam.get("expressNo");   //快递单号
+		String sSerialno = oParam.get("serialno");   //序列号
+		String userId = oParam.get("creatBy");
+		String strNo = oParam.get("strNo");
+		
+		if (StringUtils.isNotEmpty(sState)) {
+			if (sState.indexOf(",") >= 0) {
+				sCondition.append(" AND ta.state IN (");
+				String stateList = "";
+				String[] aStateSign = StringUtils.split(sState, ",");		//状态符
+				for (String sign : aStateSign) {
+					if ("".equals(stateList)) {
+						stateList = "'" + OrderFormDictionary.getStateValue(StringUtil.toString(sign)) + "'";
+					}
+					else {
+						stateList += ",'" + OrderFormDictionary.getStateValue(StringUtil.toString(sign)) + "'";
+					}
+				}
+				sCondition.append(stateList).append(")	\n");
+			}
+			else {
+				sCondition.append(" AND ta.state='").append(OrderFormDictionary.getStateValue(sState)).append("'	\n");
+			}
+		}
+		if (StringUtils.isNotEmpty(sCompany)) {
+			sCondition.append(" AND ta.company='").append(sCompany).append("'	\n");
+		}
+		if (StringUtils.isNotEmpty(sType1)) {
+			sCondition.append(" AND ta.type1='").append(sType1).append("'	\n");
+		}
+		if (StringUtils.isNotEmpty(sType2)) {
+			sCondition.append(" AND ta.type2='").append(sType2).append("'	\n");
+		}
+		if (StringUtils.isNotEmpty(sProduct)) {
+			sCondition.append(" AND ta.product='").append(sProduct).append("'	\n");
+		}
+		if (StringUtils.isNotEmpty(sScheme)) {
+			sCondition.append(" AND ta.scheme='").append(sScheme).append("'	\n");
+		}
+		if (StringUtils.isNotEmpty(sStartTime)) {
+			sCondition.append(" AND ta.creatTime>='").append(sStartTime).append("'	\n");
+		}
+		if (StringUtils.isNotEmpty(sEndTime)) {
+			sCondition.append(" AND ta.creatTime<='").append(sEndTime).append("'	\n");
+		}
+		if (StringUtils.isNotEmpty(sClickNo)) {
+			sCondition.append(" AND ta.clientNo='").append(sClickNo).append("'	\n");
+		}
+		if (StringUtils.isNotEmpty(userId)) {
+			sCondition.append(" AND ta.creatBy='").append(userId).append("'	\n");
+		}
+		if (StringUtils.isNotEmpty(sExpressage)) {
+			sCondition.append(" AND ta.expressage='").append(sExpressage).append("'	\n");
+		}
+		if (StringUtils.isNotEmpty(sExpressNo)) {
+			sCondition.append(" AND ta.expressNo='").append(sExpressNo).append("'	\n");
+		}
+		if (StringUtils.isNotEmpty(sSerialno)) {
+			sCondition.append(" AND ta.serialno='").append(sSerialno).append("'	\n");
+		}
+		if(StringUtils.isNotEmpty(strNo)){//批量导入IMEI查询条件
+			sCondition.append(" AND ta.serialno in("+ strNo +") \n");
+		}
+		
+		return sCondition.toString();
+	}
+
+	/**
+	 * 查询单个订单
+	 * @param sId 订单ID
+	 * @return
+	 */
+	public DynaBean getOrder(String sId) {
+		StringBuffer oSql = new StringBuffer();
+		oSql.append(" SELECT ta.id, ta.company, ta.type1, ta.type2,	\n");
+		oSql.append("	ta.product,	\n");
+		oSql.append("	ta.scheme,	ta.newNo, ta.newsSeries, ta.operation1,	\n");
+		oSql.append("	ta.operation2, ta.payMoney, ta.payMode,	\n");
+		oSql.append("	ta.phone, ta.owner, ta.certificate, ta.certificateNo,	\n");
+		oSql.append("	ta.erea, ta.address, ta.postalcode, ta.expressage,	\n");
+		oSql.append("	ta.clientNo, ta.type, ta.creatTime, ta.creatBy,	\n");
+		oSql.append("	ta.remart, ta.state, ta.reason, ta.creatName, ta.serialNo, ta.commend,	\n");
+		oSql.append(" 	ss.id AS storageId, sscheme.name AS schemeName, ta.partners, ta.projectName, \n");
+		oSql.append(" 	(CASE sscheme.checkAimNo WHEN '是' THEN 'Y'	\n");
+		oSql.append("		    ELSE 'N' END) AS  checkAimNo,tp.id as productID,tp.amount, ISNULL(ta.usim,'') usim	\n");
+		oSql.append(" FROM st_orderForm ta 	\n");
+		oSql.append(" LEFT JOIN st_storage ss ON ta.serialNo=ss.no_  \n");
+		oSql.append(" LEFT JOIN st_scheme sscheme ON ta.scheme=sscheme.ID	\n");
+		oSql.append(" LEFT JOIN st_product tp ON ta.product=tp.ID	\n");
+
+		oSql.append(" WHERE 1=1	\n");
+		if (StringUtils.isNotEmpty(sId)) {
+			oSql.append(" AND ta.id='" + sId + "'");
+		}
+		System.out.println(oSql.toString());
+		DynaBean oOrder = null;		//订单
+		ResultSet oResultSet = null;
+		List<DynaBean> aResultList = null;		//返回的结果集
+		try {
+			info(oSql.toString());
+			oResultSet = EMPBusiness.getRecordsBySql(oSql.toString(), "");
+			aResultList = JdbcUtil.toList(oResultSet);
+			if (aResultList != null && aResultList.size() >= 1) {
+				oOrder = aResultList.get(0);
+			}
+		}
+		catch(Exception oEx) {
+			info("查询订单数据失败！" + oEx.getMessage());
+			oEx.printStackTrace();
+		}
+		finally {
+			EMPBusiness.close(oResultSet, POOL);
+		}
+		return oOrder;
+	}
+
+	/**
+	 * 批量更新订单状态
+	 * @param 更新条件
+	 * @return
+	 * 作废
+	 */
+//	public int updateOrderByBatch(Map<String, String> oParam) {
+//		String operate = oParam.get("operate");		//操作
+//		if (StringUtils.isEmpty(operate)) {
+//			return -1;
+//		}
+//		/**
+//		 * 更新之前必须查询出所有被更新的数据的ID,用于添加日志记录
+//		 */
+//		int nResult = 0;
+//		String sCondition = getCondition(oParam);
+//		String sQuery = "SELECT id FROM st_orderForm ta WHERE 1=1 " + sCondition;
+//		String sCreatBy = oParam.get("creatBy");			//操作人员
+//		ResultSet oResultSet = null;
+//		List<DynaBean> idList = null;					//需要添加日志的集合
+//		String updateStorageState = "UPDATE st_storage SET state=? WHERE id=?";
+//		String sInsert = "INSERT INTO st_storageLog(storageId, creatTime, creatBy, action) VALUES(?, ?, ?, ?)";
+//		try {
+//			info(sQuery);
+//			oResultSet = EMPBusiness.getRecordsBySql(sQuery, POOL);		//查询要更新的ID
+//			idList = JdbcUtil.toList(oResultSet);
+//			if (idList == null || idList.size() <= 0) {
+//				return -1;
+//			}
+//			else {
+//				String state = OrderFormDictionary.getStateValue(operate);
+//				String filterState = "";				//过滤的状态条件
+//				if ("待审核".equals(state)) {			//提交
+//					filterState = "未提交";
+//				}
+//				else if ("未提交".equals(state)) {	//审核不通过
+//					filterState = "待审核";
+//				}
+//				else {
+//					if ("审核通过".equals(state)) {		//审核通过之后订单进入备货状态
+//						filterState = "待审核";
+//					}else if("删除".equals(state)){
+//						/*
+//						 * 当不选择复选框时根据条件操作所有订单
+//						 * 主要用于判断订单提交与待审核页面：删除订单功能处理
+//						 */
+//						String sState = StringUtil.toString(oParam.get("state"),"");
+//						if(!"".equals(sState)){
+//							sState = OrderFormDictionary.getStateValue(sState);
+//						}
+//						if("".equals(sState) && "".equals(StringUtil.toString(oParam.get("cancelBtn")))){
+//							filterState = "未提交";
+//						}else if("审核通过".equals(sState)){
+//							filterState = "审核通过";
+//						}else{
+//							filterState = "待审核";
+//						}
+//					}
+//				}
+//				for (DynaBean oId : idList) {
+//					/*
+//					 * 这块业务主要用于当'配送失败', '配送成功', '取消配送', '促销成功', '促销失败'结单时，
+//					 * 订单列表“订单结果”列显示结单前的状态。
+//					 */
+//					DynaBean order = getOrder(StringUtil.toString(oId.get("id")));
+//					String orderResutl = "";
+//					if(order != null){
+//						orderResutl = StringUtil.toString(order.get("state"));
+//					}
+//					if(!"结单".equals(state)){
+//						orderResutl = "";
+//					}
+//					String sSql = "UPDATE st_orderForm SET state='" + state + "',orderResult='"+ orderResutl  +"'";
+//					sSql +=	", changeTime='"+Tools.getCurrDateTime()+"'	\n";
+//					sSql += " WHERE 1=1	\n";
+//					sSql += sCondition.replaceAll("ta\\.", "");
+//					if ("结单".equals(state)) {
+//						sSql += " AND state='"+ orderResutl +"'";		//只有这几种状态的单才能结单
+//					}else{
+//						sSql += " AND state='" + filterState + "'";
+//					}
+//					info(sSql);
+//					EMPBusiness.executeOneSqlHasNoReturnValue(sSql, POOL);
+//				}
+//
+//				//=======================================================================
+//
+////				String sSql = "UPDATE st_orderForm SET state='" + state + "'	\n";
+////				sSql += " WHERE 1=1	\n";
+////				//sSql += sCondition;
+////				sSql += sCondition.replaceAll("ta\\.", "");
+////				if ("结单".equals(state)) {
+////					sSql += " AND state IN ('配送失败', '配送成功', '取消配送', '促销成功', '促销失败')";		//只有这几种状态的单才能结单
+////				}
+////				else {
+////					sSql += " AND state='" + filterState + "'";
+////				}
+////				//System.out.println(sSql);
+////				info(sSql);
+////				EMPBusiness.executeOneSqlHasNoReturnValue(sSql, POOL);							//更新订单状态
+//
+//				//=========================================================================
+//
+//				nResult = 1;
+//				/**
+//				 * 添加日志
+//				 */
+//				for (DynaBean oId : idList) {
+//					String sStorageId = getStorageId(StringUtil.toString(oId.get("id")));//通过订单ID获取对应的库存ID
+//					if("删除".equals(OrderFormDictionary.getStateValue(operate))){
+//						JdbcUtil.update(updateStorageState, "已上架", sStorageId);	//标记库存为已上架
+//						JdbcUtil.update(sInsert, sStorageId, Tools.getCurrDateTime(), sCreatBy, "删除订单时修改库存状态为：已上架");	//写库存日志
+//					}
+//					addOrderLog(StringUtil.toString(oId.get("id")), Tools.getCurrDateTime(), sCreatBy, "修改状态为:" + state);
+//				}
+//			}
+//		}
+//		catch (Exception e) {
+//			info("批量“"+operate+"”更新订单状态为失败！" + e.getMessage());
+//			e.printStackTrace();
+//		}
+//		finally {
+//			EMPBusiness.close(oResultSet, POOL);
+//		}
+//
+//		return nResult;
+//	}
+
+	/**
+	 * 根据id更新状态
+	 * @param sIdStr id 字符串
+	 * @param 状态
+	 * @return
+	 */
+	public int updateStateByBatchUseId(String[] aIdStr, String sState, String sNickName) {
+		if (aIdStr == null || aIdStr.length < 1) {
+			return -1;
+		}
+		DBConnectionManager connMgr = DBConnectionManager.getInstance();
+		Connection con = connMgr.getConnection(POOL);
+		PreparedStatement oPstmt = null;		//订单插入预编译语句
+		PreparedStatement oPstmtLog = null;		//订单日志插入预编译语句
+		PreparedStatement updateProduct = null;		//更新产品可用数量
+		PreparedStatement insertProduct = null;		//产品流水记录
+		PreparedStatement updateProductLock = null;		//产品流水记录
+		int nResult = 0;
+		sState = OrderFormDictionary.getStateValue(sState);
+		String sSql = "UPDATE st_orderForm SET state=?,orderResult=?, changeTime=? WHERE id=?";
+		String oInsertLog = "INSERT INTO st_orderLog(orderId, creatTime, creatBy, action) VALUES(?, ?, ?, ?)";
+		String updateProductSql = "UPDATE st_product set amount=amount+1 WHERE id=?";//更新产品可用数量
+		String updateProductLockSql = "UPDATE st_product_lock set amount=amount+1 where expressage=? AND type2=? AND productID=?";//更新产品锁定表
+
+		StringBuffer oInsertProductAmountLog = new StringBuffer();
+		oInsertProductAmountLog.append("INSERT INTO st_product_amount_log	\n");//添加产品流水记录
+		oInsertProductAmountLog.append("(productId, createTime, createBy, operator, beforeChange, afterChange, change, orderId, action)	\n");
+		oInsertProductAmountLog.append("VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)");
+		try {
+			con.setAutoCommit(false);//手动提交
+			oPstmt = con.prepareStatement(sSql.toString());
+			oPstmtLog = con.prepareStatement(oInsertLog);
+			updateProduct = con.prepareStatement(updateProductSql);
+			insertProduct = con.prepareStatement(oInsertProductAmountLog.toString());
+			updateProductLock = con.prepareStatement(updateProductLockSql);
+			for (String sId : aIdStr) {
+				String orderRuselt = "";
+				DynaBean order = getOrder(sId);
+				if(order != null){
+					orderRuselt = StringUtil.toString(order.get("state"),"");
+				}
+
+//				==============修改：2011-08-19==author:luoyw=================
+
+				String creatTime = Tools.getCurrDateTime();
+				oPstmt.setString(1, sState);  //更新订单
+				if("结单".equals(sState)){
+					oPstmt.setString(2, orderRuselt);
+				}else{
+					oPstmt.setString(2, "");
+				}
+
+				oPstmt.setString(3, Tools.getCurrDateTime());
+				oPstmt.setString(4, sId);
+				oPstmt.executeUpdate();
+
+				oPstmtLog.setString(1, sId);  //添加日志
+				oPstmtLog.setString(2, creatTime);
+				oPstmtLog.setString(3, sNickName);
+				oPstmtLog.setString(4, "修改状态为"+sState);
+				oPstmtLog.executeUpdate();
+
+				if("删除".equals(sState)){
+					String productID = StringUtil.toString(order.get("productID"));
+					int amount = Integer.parseInt(StringUtil.toString(order.get("amount")));
+
+					updateProduct.setString(1, productID);
+					updateProduct.executeUpdate();
+
+					insertProduct.setString(1,  productID);
+					insertProduct.setString(2, Tools.getCurrDateTime());
+					insertProduct.setString(3, sNickName);
+					insertProduct.setString(4, "+");
+					insertProduct.setInt(5, amount);
+					insertProduct.setInt(6, amount+1);
+					insertProduct.setInt(7, 1);
+					insertProduct.setString(8, sId);
+					insertProduct.setString(9, "删除订单修改产品可用数量+1");
+					insertProduct.executeUpdate();
+
+					updateProductLock.setString(1, StringUtil.toString(order.get("expressage")));
+					updateProductLock.setString(2, StringUtil.toString(order.get("type2")));
+					updateProductLock.setString(3, productID);
+					updateProductLock.executeUpdate();
+				}
+
+				con.commit();
+				nResult++;
+
+				//=======================短信发送==================
+
+				if("审核通过".equals(sState)){
+					String sSerialNo = String.valueOf(EMPSequence.getNextId("order_data_send"));
+					String sSms = "尊敬的客户，您已成功在佛山移动订购（"+order.get("schemeName") +"），订单号（"+ sId +"），" +
+							"订购人（"+ order.get("owner") +"），签收人地址（"+ order.get("address") +"）。";
+					String str = send(sSms, StringUtil.toString(order.get("clientNo")), "", "02", sNickName, "", "", sSerialNo);
+					if("发送成功！".equals(str)){
+						System.out.println("短信发送成功！");
+					}else if("发送失败！".equals(str)){
+						System.out.println("短信发送失败！");
+					}else{
+						System.out.println("str="+str);
+					}
+				}
+
+				//================================================
+			}
+		}catch(SQLException e1){
+			e1.printStackTrace();
+			try {
+				con.rollback();
+			} catch (SQLException e) {
+				System.out.println(e1.getMessage());
+			}
+			e1.printStackTrace();
+		}catch (Exception e) {
+			e.printStackTrace();
+		}finally{
+			try{
+				if(oPstmt != null){
+					oPstmt.close();
+				}
+				if(oPstmtLog != null){
+					oPstmtLog.close();
+				}
+				if(updateProduct != null){
+					updateProduct.close();
+				}
+				if(insertProduct != null){
+					insertProduct.close();
+				}
+				if(updateProductLock != null){
+					updateProductLock.close();
+				}
+			}catch(SQLException e){
+				e.printStackTrace();
+			}
+		}
+
+		return nResult;
+	}
+
+	/**
+	 * 添加订单日志
+	 * @param param
+	 */
+	public void addOrderLog(String orderId,  String creatTime, String creatBy, String action) {
+		String sSql = "INSERT INTO st_orderLog(orderId, creatTime, creatBy, action)	\n";
+		sSql += " VALUES(?, ?, ?, ?)";
+		try {
+			JdbcUtil.update(sSql, orderId, creatTime, creatBy, action);
+		}
+		catch (Exception e) {
+			EMPCommInfo.writeServerLog("写订单日志失败！" + e.toString());
+			e.printStackTrace();
+		}
+	}
+
+	/**
+	 * 修改订单
+	 * @param oOrder
+	 * @return
+	 */
+	public int modify(DynaBean order) {
+		if (order == null) {
+			return -1;
+		}
+		String id = StringUtil.toString(order.get("id"));
+		if (StringUtils.isEmpty(id)) {
+			debug("订单id为空未执行修改！");
+			return -1;
+		}
+		String company = StringUtil.toString(order.get("company"), "");
+		String type1 = StringUtil.toString(order.get("type1"), "");
+		String type2 = StringUtil.toString(order.get("type2"), "");
+		String product = StringUtil.toString(order.get("product"), "");
+		String scheme = StringUtil.toString(order.get("scheme"), "");
+		String newNo = StringUtil.toString(order.get("newNo"), "");
+		String newsSeries = StringUtil.toString(order.get("newsSeries"), "");
+		String operation1 = StringUtil.toString(order.get("operation1"), "");
+		String operation2 = StringUtil.toString(order.get("operation2"), "");
+		String payMoney = StringUtil.toString(order.get("payMoney"), "");
+		String payMode = StringUtil.toString(order.get("payMode"), "");
+		String phone = StringUtil.toString(order.get("phone"), "");
+		String owner = StringUtil.toString(order.get("owner"), "");
+		String certificate = StringUtil.toString(order.get("certificate"), "");
+		String certificateNo = StringUtil.toString(order.get("certificateNo"), "");
+		String erea = StringUtil.toString(order.get("erea"), "");
+		String address = StringUtil.toString(order.get("address"), "");
+		String postalcode = StringUtil.toString(order.get("postalcode"), "");
+		String expressage = StringUtil.toString(order.get("expressage"), "");
+		String clientNo = StringUtil.toString(order.get("clientNo"), "");
+		String type = StringUtil.toString(order.get("type"), "");
+		String creatTime = Tools.getCurrDateTime();
+		String creatBy = StringUtil.toString(order.get("creatBy"), "");
+		String creatName = StringUtil.toString(order.get("creatName"), "");
+		String reason = StringUtil.toString(order.get("reason"), "");
+		String remart = StringUtil.toString(order.get("remart"), "");
+		String serialNo = StringUtil.toString(order.get("serialNo"));
+		String commend = StringUtil.toString(order.get("commend"), "");//推荐人
+		String partners = StringUtils.defaultIfEmpty((String)order.get("partners"), ""); //合作商
+		String projectName = StringUtils.defaultIfEmpty((String)order.get("projectName"), ""); //项目名称
+
+		StringBuffer oSql = new StringBuffer();
+		oSql.append("UPDATE  st_orderForm ");
+		oSql.append("SET company=?, type1=?, type2=?, product=?, scheme=?,	\n");
+		oSql.append("newNo=?, newsSeries=?, operation1=?, operation2=?, payMoney=?,	\n");
+		oSql.append("payMode=?, phone=?, owner=?, certificate=?, certificateNo=?,	\n");
+		oSql.append("erea=?, address=?, postalcode=?, expressage=?, clientNo=?,	\n");
+		oSql.append("type=?, creatBy=?, remart=?,  \n");
+		oSql.append("reason=?, creatName=?, serialNo=?,commend=?, partners=?, projectName=? ");
+		oSql.append("WHERE 1=1 AND id=?");
+		int nUpdate = -1;
+		try {
+			Object[] aParam = {
+							company, type1, type2, product, scheme, newNo, newsSeries,
+							operation1, operation2, payMoney, payMode, phone, owner, certificate,
+							certificateNo, erea, address, postalcode, expressage, clientNo, type,
+							creatBy, remart, reason, creatName, serialNo, commend, partners, projectName, id
+						};
+			nUpdate = JdbcUtil.update(oSql.toString(), aParam);
+			/*
+			 * 修改订单时确保不受15天限制
+			 */
+			if(nUpdate > 0){
+				nUpdate = 1000;
+			}
+			addOrderLog(id, creatTime, creatName, "在审核页面修改订单内容");
+
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+
+		return nUpdate;
+	}
+
+
+	/**
+	 * 待审核订单修改
+	 * @param oOrder
+	 * @return
+	 */
+	public int verityOrderModify(DynaBean order) {
+		if (order == null) {
+			return -1;
+		}
+		String id = StringUtil.toString(order.get("id"));
+		if (StringUtils.isEmpty(id)) {
+			debug("订单id为空未执行修改！");
+			return -1;
+		}
+		String expressage = StringUtil.toString(order.get("expressage"), "");
+		String creatName = StringUtil.toString(order.get("creatName"), "");
+		String creatTime = Tools.getCurrDateTime();
+
+		StringBuffer oSql = new StringBuffer();
+		oSql.append("UPDATE  st_orderForm ");
+		oSql.append("SET expressage=? WHERE 1=1 AND id=?	\n");
+		int nUpdate = -1;
+		try {
+			Object[] aParam = {expressage};
+			nUpdate = JdbcUtil.update(oSql.toString(), aParam);
+			/*
+			 * 修改订单时确保不受15天限制
+			 */
+			if(nUpdate > 0){
+				nUpdate = 1000;
+			}
+			addOrderLog(id, creatTime, creatName, "在待审核页面将订单批复给指定符合条件的物流商");
+
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+
+		return nUpdate;
+	}
+	/**
+	 * 查询某订单的id
+	 * @param sId		需要查询的订单的id
+	 * @param oParam	其他附加查询条件
+	 * @return
+	 */
+	public List<DynaBean> getLogs(String sId, Map<String, String> oParam) {
+		StringBuffer sSql = new StringBuffer();
+		sSql.append("SELECT ta.orderId, ta.creatTime, ta.creatBy, ta.action	\n");
+		sSql.append("FROM st_orderLog ta	\n");
+		sSql.append("WHERE 1=1	");
+		if (StringUtils.isNotEmpty(sId)) {
+			sSql.append("AND ta.orderId='" + sId + "'");
+		}
+		if (oParam != null) {
+			String sStartTime = oParam.get("startTime");
+			String sEndTime = oParam.get("endTime");
+			if (StringUtils.isNotEmpty(sStartTime)) {
+				sSql.append(" AND ta.creatTime>='").append(sStartTime).append("'	\n");
+			}
+			if (StringUtils.isNotEmpty(sEndTime)) {
+				sSql.append(" AND ta.creatTime<='").append(sEndTime).append("'	\n");
+			}
+		}
+		sSql.append("ORDER BY ta.creatTime DESC");
+		ResultSet oResultSet = null;
+		List<DynaBean> aResultList = null;		//返回的结果集
+		try {
+			info(sSql.toString());
+			oResultSet = EMPBusiness.getRecordsBySql(sSql.toString(), POOL);
+			aResultList = JdbcUtil.toList(oResultSet);
+		}
+		catch (Exception e) {
+			info("查询日志信息失败！" + e.getMessage());
+			e.printStackTrace();
+		}
+		finally {
+			EMPBusiness.close(oResultSet, POOL);
+		}
+		return aResultList;
+	}
+
+	/**
+	 * 检查客户号码是否为营销方案的目标号码
+	 * @param sScheme	营销方案id
+	 * @param sClientNo	客户号码id
+	 * @return
+	 */
+	public boolean validateRight(String sScheme, String sClientNo) {
+		/**
+		 * 由20704客服接口 取代 
+		 * lijunjun 2012-05-24
+		 */
+		if (StringUtils.isEmpty(sScheme) || StringUtils.isEmpty(sClientNo)) {
+			return false;
+		}
+		String sSql = "SELECT * FROM st_aimNo t WHERE t.FKey='" + sScheme + "' AND t.mobileno='" + sClientNo + "'";
+		List aList = JdbcUtil.query(sSql);
+		if (aList == null || aList.size() < 1) {
+			return false;
+		}
+		return true;
+	}
+
+	/**
+	 * 查询营销方案付款金额以及更多信息
+	 * @return
+	 */
+	public Map<String, String> getSchemePayAndMore(String sSchemeId, String sProductId) {
+		String sSql = "SELECT price_, (CASE checkAimNo WHEN '是' THEN 'Y' ELSE 'N' END) AS checkAimNo " +
+				" FROM st_scheme WHERE id='"+sSchemeId+"'";
+		if (StringUtils.isNotBlank(sProductId)) {
+			sSql += "AND productId='" + sProductId + "'";
+		}
+		return JdbcUtil.get(sSql);
+	}
+
+
+	/*
+	 * 通过订单ID获取对应的库存ID
+	 */
+	public String getStorageId(String sId){
+		ResultSet rs = null;
+		String storageId = "";//获取库存ID
+		try{
+//			通过订单ID获取对应库存ID
+			String storageSql = "select top 1 ts.ID as storageId from st_orderForm ta ";
+			storageSql +="left join st_storage ts on ta.serialNo=ts.no_ where ta.ID='"+sId+"'";
+			rs=EMPBusiness.getRecordsBySql(storageSql, POOL);
+			if(rs.next()){
+				storageId = rs.getString("storageId");
+			}
+		}catch(Exception ex){
+			info("通过订单ID查询对应库存ID失败！" + ex.getMessage());
+			ex.printStackTrace();
+		}
+		finally {
+			EMPBusiness.close(rs, POOL);
+		}
+		return storageId;
+	}
+
+	public boolean checkStorageState(String no,String state){
+		boolean flag = false;
+		String sSqlStorage = "SELECT * FROM st_storage WHERE no_='"+ no +"' AND state='"+ state +"'";
+		ResultSet rs = null;
+		try{
+			info(sSqlStorage.toString());
+			rs = EMPBusiness.getRecordsBySql(sSqlStorage.toString(), POOL);
+			if(rs != null && rs.next()){
+				flag = true;
+			}
+		}catch(Exception e){
+			flag = false;
+			e.printStackTrace();
+		}finally{
+			EMPBusiness.close(rs, POOL);
+		}
+		return flag;
+	}
+
+	/**
+	 * 更新产品可用数量
+	 * @param sProductId
+	 * @return
+	 */
+	public int updateProductAmount(char cOperator, String sProductId, String sCreateBy, String sOrderId) {
+		if (cOperator != '-' && cOperator != '+') {
+			return -1;
+		}
+		String sUpdateProduct = "UPDATE st_product SET amount=amount"+cOperator+"1 WHERE id=?";
+
+		int nResult = 0;
+		try {
+			nResult = JdbcUtil.update(sUpdateProduct, new Object[]{sProductId});
+			if (nResult > 0) {
+				DataBaseDao baseDao = new DataBaseDao();
+				int nBeforeChange =  baseDao.getProductAmount(sProductId);
+				baseDao.insertProductAmountLog(sProductId, Tools.getCurrDateTime(), sCreateBy, cOperator, nBeforeChange, 1, sOrderId, "修改订单产品变更");
+			}
+		}
+		catch(Exception ex) {
+			info("更新产品可用数量错误！" + ex.getMessage());
+		}
+		return nResult;
+	}
+
+	/**
+	 * 更新产品可用数量
+	 * @param sProductId
+	 * @return
+	 */
+	public int updateProductLockAmount(char cOperator, String sProductId, String expressage) {
+		if (cOperator != '-' && cOperator != '+') {
+			return -1;
+		}
+		String updateProductLock = "UPDATE st_product_lock SET amount=amount"+cOperator+"1 where expressage=? AND productID=?";
+
+		int nResult = 0;
+		try {
+			nResult = JdbcUtil.update(updateProductLock, new Object[]{expressage,sProductId});
+		}
+		catch(Exception ex) {
+			info("更新产品锁定表可用数量错误！" + ex.getMessage());
+		}
+		return nResult;
+	}
+
+	/*
+	 * 通过子类型ID判断是否为信息机、TD上网卡
+	 */
+	public Map<String,String> checkTypeName(String id){
+		String tSql = "SELECT * FROM st_type WHERE id='"+ id +"' AND name not in('信息机','TD上网卡')";
+		return JdbcUtil.get(tSql);
+	}
+
+	/**
+	 * @TODO 查询所有订单数据，并导出
+	 * @param 当前写数据的sheet 每个sheet 10000行记录
+	 * @param 查询条件
+	 * @param 需要查询的列
+	 * @return List<DynaBean>
+	 * author : luoyw
+	 * date : 2011-09-16
+	 */
+	public List<Map<String,String>> getAllOrderListToExport(Map<String, String> oParam) {
+		StringBuffer oSql = new StringBuffer();
+		String sCondition = getCondition(oParam);		//附加查询条件
+		oSql.append(" SELECT \n");
+		oSql.append("	ta.id, terea.name AS company, ISNULL(t1.name,'') AS type1, ISNULL(t2.name,'') AS  type2,	\n");
+		oSql.append("	ISNULL((tp.name + '－' + tp.model + '－' + tp.color),'') AS product, ta.serialNo,\n");
+		oSql.append("	ISNULL(tscheme.schemeFlag,'') AS schemeFlag,ISNULL(tscheme.name,'') AS scheme,	newNo, newsSeries, operation1,	\n");
+		oSql.append("	ISNULL(buyPrice,'0') AS buyPrice,ISNULL(backPrice,'0') AS backPrice,operation2, payMoney, payMode,	\n");
+		oSql.append("	replace(replace(ta.phone,char(10),''),char(13),'') AS phone, owner, certificate, certificateNo,	\n");
+		oSql.append("	ISNULL(terea2.name,'') AS erea, replace(replace(ta.address,char(10),''),char(13),'') AS address , postalcode, ISNULL(tex.name,'') AS expressage,	\n");
+		oSql.append("	clientNo, ta.type, ta.creatTime, ta.creatBy,	\n");
+		oSql.append("	(CASE	\n");
+		oSql.append("		WHEN DATALENGTH(reason)>16 THEN SUBSTRING(ISNULL(reason,''),0,16)+'...'	\n");
+		oSql.append("		WHEN DATALENGTH(reason)<16 THEN reason	\n");
+		oSql.append("		ELSE ISNULL(reason, '') END) AS shortReason,	\n");
+        oSql.append("	replace(replace(ta.remart,char(10),''),char(13),'') AS remart, ta.state, ISNULL(ta.reason,'') AS reason, creatName, \n");
+		oSql.append("   DATEDIFF(hh , convert(datetime, ta.changeTime), getdate()) AS overtime, ISNULL(ta.commend,'') AS commend, \n");
+		oSql.append("   ta.orderResult,ISNULL(u.user_name,'') AS user_name,ISNULL(d.dept_name,'') AS dept_name, ISNULL(ta.usim,'') usim,  \n");
+		oSql.append("	ISNULL(DATEDIFF(dd, convert(datetime,ta.creattime),convert(datetime,ta.changetime)),'') AS orderDate, \n");
+		oSql.append("	ISNULL(ta.changeTime,'') as changeTime, \n");
+		oSql.append("   ISNULL(ta.expressNo,'')AS expressNo, ISNULL(ta.expressState,'') AS expressState, ISNULL(spn.partners_name,'') AS partnersName,  \n");
+		oSql.append(" ISNULL(wpj.name,'') AS projectName, \n");
+		oSql.append(" ISNULL(ol.creatTime,'') AS distribSuccessTime, \n");
+		oSql.append(" ISNULL(ol2.creatTime,'') AS approvedSuccessTime \n");
+		oSql.append("   FROM st_orderForm ta	\n");
+		oSql.append("	LEFT JOIN st_erea terea ON ta.company=terea.id	\n");		//关联地区表查询出分公司
+		oSql.append("	LEFT JOIN st_type t1 ON ta.type1=t1.id	\n");				//关联类型表查询出类型
+		oSql.append("	LEFT JOIN st_type t2 ON ta.type2=t2.id	\n");
+		oSql.append("	LEFT JOIN st_product tp ON ta.product=tp.id	\n");			//关联产品表查询出产品信息
+		oSql.append("	LEFT JOIN st_scheme tscheme ON ta.scheme=tscheme.id	\n");	//关联营销方案查询出方案名称
+		oSql.append("	LEFT JOIN st_erea terea2 ON ta.erea=terea2.id	\n");		//关联地区表查询出区域
+		oSql.append("	LEFT JOIN st_expressage tex ON ta.expressage=tex.id	\n");	//关联物流商
+		oSql.append("   LEFT JOIN ts_user u ON ta.creatBy=u.user_id \n");
+		oSql.append("   LEFT JOIN ts_dept d ON d.dept_id=u.dpid");
+		oSql.append("   LEFT JOIN st_partners spn ON spn.partners_id=ta.partners \n");
+		oSql.append("   LEFT JOIN wp_project wpj ON wpj.proj_id=ta.projectName \n");
+		oSql.append("   LEFT JOIN st_orderLog ol ON ta.id=ol.orderId AND ol.action like '%配送成功%' ");
+		oSql.append(" LEFT JOIN st_orderLog ol2 ON ta.id=ol2.orderId AND ol2.action like '%审核通过%' \n");
+		oSql.append("   WHERE 1=1	\n");
+		oSql.append(sCondition);
+		// 配送成功时间 lijunjun 2012-07-24
+		String distribSuccessStartTime = oParam.get("distribSuccessStartTime");
+		String distribSuccessEndTime = oParam.get("distribSuccessEndTime");
+		if (StringUtils.isNotEmpty(distribSuccessStartTime)) {
+			oSql.append(" AND ol.creatTime>='").append(distribSuccessStartTime).append("'	\n");
+		}
+		if (StringUtils.isNotEmpty(distribSuccessEndTime)) {
+			oSql.append(" AND ol.creatTime<='").append(distribSuccessEndTime).append("'	\n");
+		}
+		
+		oSql.append("  ORDER BY ta.creatTime DESC");
+		System.out.println(oSql.toString());
+		ResultSet oResultSet = null;
+		List<Map<String,String>> aResultList = null;		//返回的结果集
+		try {
+			info(oSql.toString());
+			oResultSet = EMPBusiness.getRecordsBySql(oSql.toString(), POOL);
+			aResultList = JdbcUtil.toMapList(oResultSet);
+		}catch(Exception oEx) {
+			info("查询订单列表数据失败！" + oEx.getMessage());
+			oEx.printStackTrace();
+		}
+		finally {
+			EMPBusiness.close(oResultSet, POOL);
+		}
+		return aResultList;
+	}
+
+	/**
+	 * @TODO 调用短信接口发送短信
+	 * @param 短信内容
+	 * @param 手机号码
+	 */
+	public String send(String sSms, String sMobile, String sModule, String sVerifyNum, String sUserId,
+			String sProductId, String sProjectId, String sId) {
+		String sStr = "";
+		try {
+			InputStream oIs = this.getClass().getResourceAsStream("/sys.properties");
+			Properties sysProps = new Properties();
+			sysProps.load(oIs);
+			//电子商务短信端口
+			String wappush_SmsPort = sysProps.getProperty("wappush_SmsPort");
+			wappush_SmsPort = StringUtil.toString(wappush_SmsPort);
+
+			//业务编号
+			String wappush_channel_id = sysProps.getProperty("wappush_channel_id");
+			wappush_channel_id = StringUtil.toString(wappush_channel_id);
+
+			//sp登录名
+			String sp_login_name = sysProps.getProperty("wappush_sp_login_name");
+			sp_login_name = StringUtil.toString(sp_login_name);
+
+			//sp密码
+			String sp_password = sysProps.getProperty("wappush_sp_password");
+			sp_password = StringUtil.toString(sp_password);
+
+			HTTPConnect oConnect = new HTTPConnect();
+			// 需要修改gmcc_login_name, password, channel_id
+			String sHttpUrl = "http://10.248.112.2:8898/GmccChannelSrv";
+			String sMsg = "gmcc_login_name=" + sp_login_name + "&password=" + sp_password
+					+ "&channel_id=" + wappush_channel_id + "&mobile=" + sMobile
+					+ "&userdata=" + sSms + "&TP_udhi=0&Msg_Fmt=8&FeeType=02&FeeCode=0&"
+					+ "Fee_UserType=0&Fee_terminal_Id=" + sMobile + "&suffix=" + sVerifyNum + "&sendsmstype=1&SRR=1";
+
+
+			System.out.println("正在请求地址：" + sHttpUrl + " \n 发送：" + sMsg);
+
+			String sResult = "";
+			sResult = oConnect.request(sHttpUrl, sMsg);
+			if(StringUtils.isNotEmpty(sResult)){
+				sResult = StringUtil.getGBK(sResult).trim();
+			}
+			//请求短信发送接口
+
+			System.out.println(sResult+"发送结果");
+			sResult = sResult.replace("，", ",");
+			String[] aResult = StringUtils.split(sResult, ",");
+			String sMsgId = "";
+			if (sResult.startsWith("0")) { // 发送成功
+				sStr = "发送成功！";
+				sMsgId = aResult[1];
+			}
+			else {
+				sStr = "发送失败！";
+			}
+			HashMap<String, String> oParam = new HashMap<String, String>();
+			oParam.put("serial_no", sId);
+			oParam.put("sMsgId", sMsgId);				//短信序列号
+			oParam.put("sOrgaddr", wappush_SmsPort);	//1008600348+02信息发送端口
+			oParam.put("sDestaddr", sMobile);			//目标号码
+			oParam.put("sUserdata", sSms);				//发送内容
+			oParam.put("sRead_flag", "");				//阅读标记
+			oParam.put("sSend_flag", aResult[0]);		//发送结果标记
+			oParam.put("sDel_flag", "");				//删除标记
+			oParam.put("sComments", "");				//备注
+			oParam.put("sUser_id", sUserId);			//信息发送人
+			oParam.put("sSms_type_id", "2");			//信息发送类型，1代表短信；2代表wappush
+			oParam.put("sProductId", sProductId);		//产品id
+			oParam.put("sProjectId", sProjectId);		//项目
+
+			if("02".equals(sVerifyNum)){
+				int nResult= insertOrderSend(oParam);	//添加发送数据记录
+				if (nResult < 0) {
+					System.out.println("添加数据记录失败！");
+					String sNow = Tools.getCurrDateTime();
+					StringBuffer oSql = new StringBuffer();
+					oSql.append("INSERT INTO order_data_send( ");
+					oSql.append("SERIAL_NO,	 MSGID, ORGADDR, DESTADDR,	 USERDATA,	");
+					oSql.append("[TIME], READ_FLAG, SEND_FLAG,	DEL_FLAG, COMMENTS,	");
+					oSql.append("USER_ID, SMS_TYPE_ID) VALUES ");
+					oSql.append("('" + sId + "', '"+sMsgId+"', '"+wappush_SmsPort+"', '" + sMobile + "', \n");
+					oSql.append("'" + sSms + "', '"+ sNow +"', '', '" + aResult[0] + "', '', '', '"+sUserId+"', '1') \n");
+					m_LOG.error(oSql.toString());
+				}
+			}
+		}
+		catch (java.net.ConnectException ex) {
+			sStr = "与短信服务建立通信失败！" + ex.getMessage();
+			EMPCommInfo.writeServerLog("发送短信出异常:" + ex.toString());
+		}
+		catch (Exception e) {
+			EMPCommInfo.writeServerLog("发送短信出异常:" + e.toString());
+			sStr = "发送失败！" + e.getMessage();
+		}
+		return sStr;
+	}
+
+
+	/**
+	 * author : luoyw
+	 * 添加订单信息发送记录
+	 * @param oParam
+	 * @return
+	 */
+	public int insertOrderSend(Map<String, String> oParam) {
+		StringBuffer oSql = new StringBuffer();
+		oSql.append("INSERT INTO order_data_send(	\n");
+		oSql.append("SERIAL_NO, MSGID, ORGADDR, DESTADDR,	\n");
+		oSql.append("USERDATA, [TIME],	");
+		oSql.append("READ_FLAG,	 SEND_FLAG,	\n");
+		oSql.append("DEL_FLAG, COMMENTS, USER_ID,	");
+		oSql.append("SMS_TYPE_ID)	\n");
+		oSql.append("VALUES	\n");
+		oSql.append("(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)	\n");
+		String sSerialNo = StringUtil.toString(oParam.get("serial_no"));
+		String sMsgId = StringUtil.toString(oParam.get("sMsgId"));
+		String sOrgaddr = StringUtil.toString(oParam.get("sOrgaddr"));
+		String sDestaddr = StringUtil.toString(oParam.get("sDestaddr"));
+		String sUserdata = StringUtil.toString(oParam.get("sUserdata"));
+		String sTime = Tools.getCurrDateTime();
+		String sRead_flag = StringUtil.toString(oParam.get("sRead_flag"));
+		String sSend_flag = StringUtil.toString(oParam.get("sSend_flag"));
+		String sDel_flag = StringUtil.toString(oParam.get("sDel_flag"));
+		String sComments = StringUtil.toString(oParam.get("sComments"));
+		String sUser_id = StringUtil.toString(oParam.get("sUser_id"));
+//		String sSms_type_id = StringUtil.toString(oParam.get("sSms_type_id"));
+
+		Object[] aObject = {sSerialNo, sMsgId, sOrgaddr, sDestaddr, sUserdata, sTime, sRead_flag,
+				sSend_flag, sDel_flag, sComments, sUser_id, "1"};
+
+		int nResult = 0;
+		try {
+			nResult = JdbcUtil.update(oSql.toString(), aObject);
+		}
+		catch (Exception e) {
+			info("添加订单发送记录错误" + e.getMessage());
+		}
+		return nResult;
+	}
+	/**
+	 * 根据产品频次设置验证订单频次
+	 * @param param
+	 * @return
+	 */
+	public Map<String,String> getProduct(DynaBean param){
+		if(param == null){
+			return null;
+		}
+		String type2 = StringUtil.toString(param.get("type2"), "");
+		String product = StringUtil.toString(param.get("product"), "");
+		String sSql = "SELECT * FROM st_product ta WHERE typeID='"+ type2 +"' AND id='"+ product +"'";
+		return JdbcUtil.get(sSql);
+	}
+
+	/**
+	 * @param months　与当前月的间隔月数
+	 * @return　第months月第一天零点的日期时间串
+	 */
+	public static String getFirstDayOfMonth(int months){
+		Calendar cld = Calendar.getInstance();
+		cld.add(Calendar.MONTH, months);
+		String yymm = (new SimpleDateFormat("yyyy-MM")).format(cld.getTime());
+
+		return yymm+"-01 00:00:00";
+	}
+
+	/**
+	 * @param date　当前日期
+	 * @return 获得当前日期所在周的周一零点的日期时间串
+	 */
+	public static String getMonday(Date date){
+		Calendar cld = Calendar.getInstance();
+		cld.setTime(date);
+		cld.set(Calendar.DAY_OF_WEEK,Calendar.MONDAY);
+		return new SimpleDateFormat("yyyy-MM-dd").format(cld.getTime())
+				+" 00:00:00";
+	}
+
+	/*
+	 * 按月计算
+	 */
+	public static String getMonthResult(int i, String nowdate){
+
+		nowdate = nowdate.replaceAll("-", "");
+		Date datefirst = null;
+		String getDateResult = "";
+	    try {
+	    	datefirst = new SimpleDateFormat("yyyyMMdd").parse(nowdate);
+		} catch (ParseException e) {
+				// TODO Auto-generated catch block
+		}
+
+		Calendar calendar = Calendar.getInstance();
+		calendar.setTime(datefirst);
+		calendar.add(Calendar.MONTH,  i);
+		getDateResult = new SimpleDateFormat("yyyyMMdd").format(calendar.getTime());
+		return getDateResult;
+	}
+
+	/*
+	 * 按周计算
+	 */
+	public static String getDateResult(int i, String nowdate){
+
+		nowdate = nowdate.replaceAll("-", "");
+		Date datefirst = null;
+		String getDateResult = "";
+	    try {
+	    	datefirst = new SimpleDateFormat("yyyyMMdd").parse(nowdate);
+		} catch (ParseException e) {
+				// TODO Auto-generated catch block
+		}
+
+		Calendar calendar = Calendar.getInstance();
+		calendar.setTime(datefirst);
+		calendar.add(Calendar.DATE, i);
+		getDateResult = new SimpleDateFormat("yyyyMMdd").format(calendar.getTime());
+		return getDateResult;
+	}
+
+
+	public static void main(String[] args) {
+//		System.out.println(getDateResult(0,Tools.getCurrDateTime()));
+//		System.out.println(getDateResult(7,"2011-12-31 12:13:34"));
+//		System.out.println(getDateResult(0,Tools.getCurrDateTime()));
+//		System.out.println(getDateResult(7,"2011-12-31 12:13:34"));
+	}
+
+	/**
+	 * 获取订购产品提示信息
+	 * @param orderFrequency
+	 * @return
+	 */
+	public String getPrompt(Map<String,String> orderFrequency){
+		if(orderFrequency == null){
+			return null;
+		}
+		String limType = StringUtil.toString(orderFrequency.get("limType"));
+		String orderNum = StringUtil.toString(orderFrequency.get("orderNum"),"0");
+		String zhouNum = StringUtil.toString(orderFrequency.get("zhouNum"),"0");
+		String yueNum = StringUtil.toString(orderFrequency.get("yueNum"),"0");
+		String nianNum = StringUtil.toString(orderFrequency.get("nianNum"),"");
+		String dayNum = StringUtil.toString(orderFrequency.get("dayNum"),"0");
+		String startTime = StringUtil.toString(orderFrequency.get("startTime"));
+		String endTime = StringUtil.toString(orderFrequency.get("endTime"));
+		String typeName = "";
+		if("1".equals(limType)){
+			typeName = "该产品限制每个客户"+zhouNum+"周内只能订购"+orderNum+"个，该客户"+zhouNum+"周内已经成功订购"+orderNum+"个产品。";
+		}
+		if("2".equals(limType)){
+			typeName = "该产品限制每个客户"+yueNum+"月内只能订购"+orderNum+"个，该客户"+yueNum+"月内已经成功订购"+orderNum+"个产品。";
+		}
+		if("3".equals(limType)){
+			typeName = "该产品限制每个客户"+dayNum+"天内只能订购"+orderNum+"个，该客户"+dayNum+"天内已经成功订购"+orderNum+"个产品。";
+		}
+		if("4".equals(limType)){
+			typeName = "该产品限制每个客户在"+startTime+" ~ "+endTime+"时间段内只能订购"+orderNum+"个，该客户在"+startTime+" ~ "+endTime+"时间段内已经成功订购"+orderNum+"个产品。";
+		}
+		if("5".equals(limType)){
+			typeName = "该产品限制每个客户"+nianNum+"年内只能订购"+orderNum+"个，该客户"+nianNum+"年内已经成功订购"+orderNum+"个产品。";
+		}
+		return typeName;
+	}
+
+	/**
+	 * @param oParam
+	 * @return
+	 */
+	public static Map<String,String> getOrder(Map<String,String> oParam){
+		if(oParam == null){
+			return null;
+		}
+		String clientNo = StringUtil.toString(oParam.get("clickNo"),"");
+		String oSql = "SELECT TOP 1 ta.id, ta.clientNo, ta.creatTime FROM st_orderForm ta \n";
+		oSql += "WHERE clientNo='"+clientNo+"' \n";
+		oSql += "AND state not in('删除','备货失败','取消配送','促销失败','配送失败') \n";
+		oSql += "AND orderResult not in('配送失败','促销失败') \n";
+		oSql += "ORDER BY creatTime DESC";
+//		System.out.println("oSql="+oSql);
+		return JdbcUtil.get(oSql);
+	}
+
+	/**
+     * 根据设置产品频次来控制每个用户下订数量
+     */
+	public static String getProductFrequency(DynaBean param) {
+		if(param == null){
+			return null;
+		}
+		String sMsgTemp = "";
+		Map<String,String> orderFrequency = new OrderDao().getProduct(param);
+        Map<String, String> oParam = new HashMap<String, String>();
+        oParam.put("clickNo", StringUtil.toString(param.get("clientNo")));
+        oParam.put("state", "1,2,3,4,7,9,11");
+        String createTime = Tools.getCurrDateTime();
+        String start_time = "";
+        String end_time = "";
+        if(orderFrequency != null){
+        	String limType = StringUtil.toString(StringUtil.toString(orderFrequency.get("limType"),"0"));
+        	int orderNum = Integer.parseInt(StringUtil.toString(orderFrequency.get("orderNum"),"0"));
+        	int zhouNum = Integer.parseInt(StringUtil.toString(orderFrequency.get("zhouNum"),"0"));
+        	int yueNum = Integer.parseInt(StringUtil.toString(orderFrequency.get("yueNum"),"0"));
+        	int nianNum = Integer.parseInt(StringUtil.toString(orderFrequency.get("nianNum"),"0"));
+        	/**
+        	 * 按自然周限制每个客户订购产品数量
+        	 */
+    		if("1".equals(limType)){
+    			Map<String,String> order = getOrder(oParam);
+            	if(order != null){
+            		start_time = getDateResult(0, createTime);//当前时间
+            		end_time = getDateResult(7*zhouNum,order.get("creatTime"));//订单时间
+            		if(end_time.compareTo(start_time)>=0){
+            			int monthNum = new OrderDao().getOrderCount(oParam);//通过客户号码与机主姓名来确定该用户自然月内所下订单数量
+            			if(monthNum>=orderNum){
+		                	sMsgTemp += new OrderDao().getPrompt(orderFrequency);
+            			}
+            		}
+            	}
+            }else if("2".equals(limType)){
+            	/**
+                 *按自然月限制每个客户订购产品数量
+                 */
+            	Map<String,String> order = getOrder(oParam);
+            	if(order != null){
+            		start_time = getMonthResult(0, createTime);//当前时间
+            		end_time = getMonthResult(1*yueNum,order.get("creatTime"));//订单时间
+            		if(end_time.compareTo(start_time)>=0){
+            			int monthNum = new OrderDao().getOrderCount(oParam);//通过客户号码与机主姓名来确定该用户自然月内所下订单数量
+            			if(monthNum>=orderNum){
+		                	sMsgTemp += new OrderDao().getPrompt(orderFrequency);
+            			}
+            		}
+            	}
+            } else if("3".equals(limType)){
+            	/**
+            	 * 按天数限制每个客户订购产品数量
+            	 */
+            	Map<String,String> order =  getOrder(oParam);
+            	if(order != null){
+            		int dayNum = Integer.parseInt(orderFrequency.get("dayNum"));
+            		start_time = StringUtil.toString(order.get("creatTime"),"");
+    				end_time = Tools.AddDateTimeDates(start_time,1 * dayNum);
+    				oParam.put("startTime", start_time);
+                    oParam.put("endTime", end_time);
+//                    System.out.println("end_time="+end_time+"  creatTime="+createTime);
+                    if(end_time.compareTo(createTime)>=0){
+	                    int days =  new OrderDao().getOrderCount(oParam);//通过客户号码与机主姓名来确定该用户在设定时间内所下订单数量
+		           		if(days>=orderNum){
+//		           		 System.out.println("days="+days+" orderNum="+orderNum);
+		           			sMsgTemp += new OrderDao().getPrompt(orderFrequency);
+		                }
+                    }
+	            }
+            }else if("4".equals(limType)){
+            	/**
+                 *按设置时间限制每个客户订购产品数量
+                 */
+            	start_time = StringUtil.toString(orderFrequency.get("startTime"));
+        		end_time = StringUtil.toString(orderFrequency.get("endTime"));
+        		 oParam.put("startTime", start_time);
+                 oParam.put("endTime", end_time);
+                 if(end_time.compareTo(createTime)>=0){
+	        		 int timeNum =  new OrderDao().getOrderCount(oParam);//通过客户号码与机主姓名来确定该用户在设定时间内所下订单数量
+	        		 if(timeNum>=orderNum){
+	        			 sMsgTemp += new OrderDao().getPrompt(orderFrequency);
+	             	}
+                 }
+            }else if("5".equals(limType)){
+            	/**
+                 *按自然年限制每个客户订购产品数量
+                 */
+            	Map<String,String> order = getOrder(oParam);
+            	if(order != null){
+            		start_time = getMonthResult(0, createTime);//当前时间
+            		end_time = getMonthResult(12*nianNum,order.get("creatTime"));//订单时间
+            		if(end_time.compareTo(start_time)>=0){
+            			int monthNum = new OrderDao().getOrderCount(oParam);//通过客户号码来确定该用户自然月内所下订单数量
+            			if(monthNum>=orderNum){
+		                	sMsgTemp += new OrderDao().getPrompt(orderFrequency);
+            			}
+            		}
+            	}
+            }
+        }
+        return sMsgTemp;
+	}
+
+
+	/**
+	 * 查询订单列表数据
+	 * @param param 查询条件
+	 * @param bExportFlag 导出Excel标记
+	 * @return
+	 */
+	public List<DynaBean> selectImeiOrderList(String strNo,Map<String,String> oParam,boolean bExportFlag) {
+		StringBuffer oSql = new StringBuffer();
+		String sCondition = getCondition(oParam);		//附加查询条件
+		int currentPage = new Integer(StringUtil.toString(oParam.get("currentPage"), "1"));
+		if (bExportFlag) {
+			oSql.append(" SELECT \n");
+		}
+		else {
+			oSql.append(" SELECT TOP 50	\n");
+		}
+		oSql.append("	ta.id, terea.name AS company, ISNULL(t1.name,'') AS type1, ISNULL(t2.name,'') AS  type2,	\n");
+		oSql.append("	ISNULL((tp.name + '－' + tp.model + '－' + tp.color),'') AS product, ta.serialNo,\n");
+		oSql.append("	ISNULL(tscheme.schemeFlag,'') AS schemeFlag,ISNULL(tscheme.name,'') AS scheme,	newNo, newsSeries, operation1,	\n");
+		oSql.append("	ISNULL(buyPrice,'0') AS buyPrice,ISNULL(backPrice,'0') AS backPrice,operation2, payMoney, payMode,	\n");
+		oSql.append("	ta.phone, owner, certificate, certificateNo,	\n");
+		oSql.append("	ISNULL(terea2.name,'') AS erea, ta.address, postalcode, ISNULL(tex.name,'') AS expressage,	\n");
+		oSql.append("	clientNo, ta.type, ta.creatTime,ta.changeTime, creatBy,	\n");
+		oSql.append("	(CASE	\n");
+		oSql.append("		WHEN DATALENGTH(reason)>16 THEN SUBSTRING(ISNULL(reason,''),0,16)+'...'	\n");
+		oSql.append("		WHEN DATALENGTH(reason)<16 THEN reason	\n");
+		oSql.append("		ELSE ISNULL(reason, '') END) AS shortReason,	\n");
+        oSql.append("	ISNULL(ta.remart,'') AS remart, ta.state, ISNULL(ta.reason,'') AS reason, creatName, \n");
+		oSql.append("   DATEDIFF(hh , convert(datetime, ta.changeTime), getdate()) AS overtime, ISNULL(ta.commend,'') AS commend, \n");
+		oSql.append(" ta.orderResult,ISNULL(u.user_name,'') AS user_name,ISNULL(d.dept_name,'') AS dept_name, ISNULL(ta.usim,'') usim,  \n");
+		oSql.append("	DATEDIFF(dd, convert(datetime,ta.creattime),convert(datetime,ta.changetime)) AS orderDate, \n");
+		oSql.append("   ISNULL(ta.expressNo,'')AS expressNo, ta.expressState, ISNULL(spn.partners_name,'') AS partnersName, ISNULL(wpj.name,'') AS projectName \n");
+		oSql.append(" FROM st_orderForm ta	\n");
+		oSql.append("	LEFT JOIN st_erea terea ON ta.company=terea.id	\n");		//关联地区表查询出分公司
+		oSql.append("	LEFT JOIN st_type t1 ON ta.type1=t1.id	\n");				//关联类型表查询出类型
+		oSql.append("	LEFT JOIN st_type t2 ON ta.type2=t2.id	\n");
+		oSql.append("	LEFT JOIN st_product tp ON ta.product=tp.id	\n");			//关联产品表查询出产品信息
+		oSql.append("	LEFT JOIN st_scheme tscheme ON ta.scheme=tscheme.id	\n");	//关联营销方案查询出方案名称
+		oSql.append("	LEFT JOIN st_erea terea2 ON ta.erea=terea2.id	\n");		//关联地区表查询出区域
+		oSql.append("	LEFT JOIN st_expressage tex ON ta.expressage=tex.id	\n");	//关联物流商
+		oSql.append(" LEFT JOIN ts_user u ON ta.creatBy=u.user_id \n");
+		oSql.append(" LEFT JOIN ts_dept d ON d.dept_id=u.dpid");
+		oSql.append(" LEFT JOIN st_partners spn ON spn.partners_id=ta.partners \n");
+		oSql.append(" LEFT JOIN wp_project wpj ON wpj.proj_id=ta.projectName \n");
+		oSql.append("");
+		oSql.append(" WHERE 1=1	\n");
+		if (!bExportFlag) {
+			oSql.append(" 	AND	ta.id NOT IN (		\n");
+			oSql.append(" 	SELECT TOP " +((currentPage - 1) * 50) + " id FROM st_orderForm WHERE 1=1 \n"+ sCondition +" \n");
+			oSql.append("AND serialno in("+ strNo +") \n");
+			oSql.append("ORDER BY creatTime DESC) \n");
+		}
+		oSql.append(sCondition);
+		oSql.append("AND serialno in("+ strNo +") \n");
+		oSql.append(" ORDER BY ta.creatTime DESC");
+//		System.out.println(oSql.toString());
+		ResultSet oResultSet = null;
+		List<DynaBean> aResultList = null;		//返回的结果集
+		try {
+			info(oSql.toString());
+			oResultSet = EMPBusiness.getRecordsBySql(oSql.toString(), POOL);
+			aResultList = JdbcUtil.toList(oResultSet);
+		}
+		catch(Exception oEx) {
+			info("查询订单列表数据失败！" + oEx.getMessage());
+			oEx.printStackTrace();
+		}
+		finally {
+			EMPBusiness.close(oResultSet, POOL);
+		}
+		return aResultList;
+	}
+
+}
