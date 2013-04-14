@@ -1,0 +1,1059 @@
+package storage.orderForm.action;
+
+import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+import javax.servlet.ServletOutputStream;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+import javax.servlet.http.HttpSession;
+
+import org.apache.commons.beanutils.DynaBean;
+import org.apache.commons.lang.StringUtils;
+import org.apache.struts.action.ActionForm;
+import org.apache.struts.action.ActionForward;
+import org.apache.struts.action.ActionMapping;
+import org.apache.struts.actions.DispatchAction;
+import org.apache.struts.upload.FormFile;
+
+import storage.orderForm.SchemeBossValidate;
+import storage.orderForm.dao.DataBaseDao;
+import storage.orderForm.dao.OrderDao;
+import storage.orderForm.excel.CSVExporter;
+import storage.orderForm.excel.OrderFormExcel;
+import storage.orderForm.form.StorageOrderForm;
+import storage.util.RequestUtils;
+import storage.util.StringUtil;
+import storage.util.Zip11;
+import storage.webservice.boss.dao.SchemeBossInterfacesDao;
+import sysMng.logs.ExportExcel;
+import work.common.EMPBusiness;
+import work.common.EMPCommInfo;
+
+import com.common.GlobalValueManager;
+import com.common.Tools;
+
+import distrib.orderAdd.poi.PoiGetExcel;
+import distrib.product.common.Encoding;
+
+/**
+ * 订单相关操作的action
+ * @author zhongzy
+ * @时间  2011-4-25 下午03:45:13
+ */
+public class OrderAction extends DispatchAction {
+    private OrderDao m_orderDao = new OrderDao();
+    private DataBaseDao m_dataBaseDao = new DataBaseDao();
+
+    /**
+     * 初始化各字段,异步
+     */
+    public String initFeild(ActionMapping mapping, ActionForm form, HttpServletRequest request,
+            HttpServletResponse response) throws Exception {
+        String tableName = StringUtils.defaultIfEmpty(request.getParameter("tableName"), "");
+        String feild = StringUtils.defaultIfEmpty(request.getParameter("feild"), "");
+        String annex = StringUtils.defaultIfEmpty(request.getParameter("annex"), "");
+        List list = m_dataBaseDao.getFeild(tableName, feild, annex);
+        RequestUtils.simpleWriteDateToResponse(list, response);
+        return null;
+    }
+
+    /**
+     *初始化select空间的内容,异步
+     */
+    public String initSelect(ActionMapping mapping, ActionForm form, HttpServletRequest request,
+            HttpServletResponse response) throws Exception {
+        String tableName = StringUtils.defaultIfEmpty(request.getParameter("tableName"), "");
+        String value = StringUtils.defaultIfEmpty(request.getParameter("value"), "");
+        String text = StringUtils.defaultIfEmpty(request.getParameter("text"), "");
+        String annex = StringUtils.defaultIfEmpty(request.getParameter("annex"), "");
+        List<DynaBean> list = m_dataBaseDao.initSelect(tableName, value, text, annex);
+        RequestUtils.simpleWriteDateToResponse(list, response);
+        return null;
+    }
+
+    /**
+     * 初始化营销方案, 异步
+     */
+    public String initScheme(ActionMapping mapping, ActionForm form, HttpServletRequest request,
+            HttpServletResponse response) throws Exception {
+        String dateTime = Tools.getCurrDateTime();
+        String annex =  " AND startTime<='" + dateTime + "'\n AND endTime>='" + dateTime + "'  \n";
+        String sField = StringUtil.toString(request.getParameter("field"));
+        String sValue = StringUtil.toString(request.getParameter("value"));
+
+        if("type1".equals(sField)) {
+            annex = " AND type1='" + sValue + "'  \n";
+        }
+        if("type2".equals(sField)) {
+            annex = " AND type2='" + sValue + "'  \n";
+        }
+        if("product".equals(sField)) {
+            annex = " AND productId='" + sValue + "'  \n";
+        }
+        List schemeLists = m_dataBaseDao.initSelect("st_scheme", "id", "name", annex);  					//营销方案
+        RequestUtils.simpleWriteDateToResponse(schemeLists, response);
+        return null;
+    }
+
+    /**
+     * 初始化营销方案, 异步
+     */
+    public String initExpressage(ActionMapping mapping, ActionForm form, HttpServletRequest request,
+            HttpServletResponse response) throws Exception {
+        String table =  " st_product_lock ta LEFT JOIN st_expressage ex ON ex.id=ta.expressage \n";
+        String sValue = StringUtil.toString(request.getParameter("productID"));
+        String annex = " AND ta.productId='" + sValue + "'  order by ex.expressLevel ASC \n";
+        List expressageList = m_dataBaseDao.initSelect(table, "ta.id", "ex.name", annex);  					//物流商
+        RequestUtils.simpleWriteDateToResponse(expressageList, response);
+        return null;
+    }
+
+
+    /**
+     * 查询营销方案支付金额以及更多别的信息
+     * @return
+     */
+    public String getSchemePay(ActionMapping mapping, ActionForm form, HttpServletRequest request,
+            HttpServletResponse response) throws Exception {
+        String sSchemeId = StringUtils.defaultIfEmpty(request.getParameter("schemeId"), "");
+        Map<String, String> payMoney = m_orderDao.getSchemePayAndMore(sSchemeId,"");
+        RequestUtils.writeDateToResponse(payMoney, response);
+        return null;
+    }
+
+
+    /**
+     * 设值到session作用域
+     */
+    public void setAttributeToRequest(HttpServletRequest request) {
+        Object obj = request.getAttribute("companyList");
+        if (obj == null) {
+            List companyList = m_dataBaseDao.initSelect("st_erea", "id", "name", " AND parentId='0' ");  			//分公司
+            List payModeList = m_dataBaseDao.getFeild("st_dictionary", "values_", " AND type='支付方式'");  		//支付方式
+            List ereaList = m_dataBaseDao.initSelect("st_erea", "id", "name", "AND parentID<>'0' ");  			//配送区域
+            List parentTypeList = m_dataBaseDao.initSelect("st_type", "id", "name",  " AND parentID='0'");  		//产品类型,最大类
+            List certificateList = m_dataBaseDao.getFeild("st_dictionary", "values_", " AND type='证件类型'");  	//证件类型
+            String dateTime = Tools.getCurrDateTime();
+            //当前有效的营销方案
+            String annex =  " AND startTime<='" + dateTime + "' AND endTime>='" + dateTime + "'";
+            List schemeList = m_dataBaseDao.initSelect("st_scheme", "id", "name", annex);  					//营销方案
+            List expressageList = m_dataBaseDao.initSelect("st_expressage", "id", "name", " ORDER BY expressLevel ASC");  //物流商
+            request.setAttribute("companyList", companyList);
+            request.setAttribute("payModeList", payModeList);
+            request.setAttribute("ereaList", ereaList);
+            request.setAttribute("parentTypeList", parentTypeList);
+            request.setAttribute("certificateList", certificateList);
+            request.setAttribute("schemeList", schemeList);
+            request.setAttribute("expressageList", expressageList);
+
+            List projectList = m_dataBaseDao.initSelect("wp_project", "proj_id", "name", "");  	//项目名称
+            request.setAttribute("projectList", projectList);
+
+            List partnersList = m_dataBaseDao.initSelect("st_partners", "partners_id", "partners_name", "");  	//合作商
+            request.setAttribute("partnersList", partnersList);
+        }
+    }
+
+    /**
+     * 加载至新订单页面
+     */
+    public ActionForward loadNewOrder(ActionMapping mapping, ActionForm form,
+            HttpServletRequest request, HttpServletResponse response) throws Exception {
+        setAttributeToRequest(request);
+        //return mapping.findForward("newOrder");
+        return new ActionForward(EMPCommInfo.getReturnPath(mapping, request.getParameter("menuId"), "newOrder"));
+    }
+    /**
+     * 加载至批量导入订单页面
+     */
+    public ActionForward loadNewOrderByBatch(ActionMapping mapping, ActionForm form,
+            HttpServletRequest request, HttpServletResponse response) throws Exception {
+        //return mapping.findForward("newOrderByBatch");
+        return new ActionForward(EMPCommInfo.getReturnPath(mapping, request.getParameter("menuId"), "newOrderByBatch"));
+    }
+
+    /**
+     * 添加新订单
+     */
+    public ActionForward addNewOrder(ActionMapping mapping, ActionForm form,
+            HttpServletRequest request, HttpServletResponse response) throws Exception {
+        DynaBean param = RequestUtils.getDynaBeanByRequest(request);
+        HttpSession session = request.getSession();
+        String sCreatBy = (String) session.getAttribute("userID");
+        String sCreatName = (String) session.getAttribute("nickName");
+        param.set("creatBy", sCreatBy);
+        param.set("creatName", sCreatName);
+        String sScheme = StringUtil.toString(request.getParameter("scheme"));  		//营销方案id
+        String sClientNo = StringUtil.toString(request.getParameter("clientNo"));  	//客户号码
+        String sNoRight = StringUtil.toString(request.getParameter("noRight"));  		//客户号码的营销方案参与资格
+        String checkAimNo = StringUtil.toString(request.getParameter("checkAimNo"));  //营销方案是否过滤目标号码
+        
+        /**
+         * 20704客服接口判断 lijunjun 2012-05-24
+         */
+  	boolean clientNoScheme = SchemeBossValidate.validate(sClientNo, sScheme);
+  	if(!clientNoScheme){
+  		String sMsg = "客户号码："+sClientNo+",不可办理该项业务，营销方案ID: "+sScheme;
+  		RequestUtils.writeStringToResponse(sMsg, response);
+  		return null;
+  	}
+        
+        /**
+         * 根据设置产品频次来控制每个用户下订数量
+         */
+        String sMsgTemp = StringUtil.toString(OrderDao.getProductFrequency(param),"");
+        if(!"".equals(sMsgTemp)){
+          RequestUtils.writeStringToResponse(sMsgTemp, response);
+  		return null;
+        }
+        int result = 0;
+
+        //检查是否产品有可以用的库存量
+        String sProductId = StringUtil.toString(request.getParameter("product"));
+        int nAmount = m_dataBaseDao.getProductAmount(sProductId);
+        if (nAmount <= 0) {
+            RequestUtils.writeDateToResponseInt(2012, response);
+            return null;
+        }
+
+        param.set("nAmount", nAmount);
+        if ("N".equals(checkAimNo)) {  				//不过滤目标号码的情况下
+            result = m_orderDao.addOrder(param);  	//执行添加操作
+        }
+        else {
+            boolean bFlag = false;
+            if ("false".equals(sNoRight)) {  	//客户号码没有营销方案参与资格
+                result = 403;  				//非法操作
+            }
+            else if ("not".equals(sNoRight)) {  						//如果没有验证号码资格则验证
+                bFlag = m_orderDao.validateRight(sScheme, sClientNo);  //验证客户号码的营销方案参与资格
+            }
+
+            if(bFlag || "true".equals(sNoRight)) {  		//客户号码具有营销方案资格的时候执行数据添加操作
+                result = m_orderDao.addOrder(param);  	//执行添加操作
+            }
+            else {
+                result = 403;
+            }
+        }
+        RequestUtils.writeDateToResponseInt(result, response);
+        return null;
+    }
+
+    /**
+     * 修改订单
+     */
+    public ActionForward modify(ActionMapping mapping, ActionForm form, HttpServletRequest request,
+            HttpServletResponse response) throws Exception {
+        DynaBean oOrder = RequestUtils.getDynaBeanByRequest(request);  	//订单
+        HttpSession session = request.getSession();
+        String creatName = StringUtil.toString(session.getAttribute("nickName"));
+        String creatBy = StringUtil.toString(session.getAttribute("userID"));
+        oOrder.set("creatName", creatName);
+        oOrder.set("creatBy", creatBy);
+        int nResult = m_orderDao.modify(oOrder);
+        String product = StringUtil.toString(request.getParameter("product"));
+        String oldProduct = StringUtil.toString(request.getParameter("oldProduct"));
+
+        String expressage = StringUtil.toString(request.getParameter("expressage"));
+        String oldExpressage = StringUtil.toString(request.getParameter("oldExpressage"));
+
+        String id = StringUtil.toString(oOrder.get("id"));
+        if (nResult > 0) {
+            if (!product.equals(oldProduct)) {
+                m_orderDao.updateProductAmount('-', product, creatName, id);
+                m_orderDao.updateProductAmount('+', oldProduct, creatName, id);
+            }
+
+            if (!expressage.equals(oldExpressage) || !product.equals(oldProduct)) {
+                m_orderDao.updateProductLockAmount('-', product, expressage);
+                m_orderDao.updateProductLockAmount('+', oldProduct, oldExpressage);
+            }
+        }
+        RequestUtils.writeDateToResponseInt(nResult, response);
+        return null;
+    }
+
+
+    /**
+     * 订单列表,分页
+     */
+    public ActionForward orderList(ActionMapping mapping, ActionForm form,
+            HttpServletRequest request, HttpServletResponse response) throws Exception {
+        setAttributeToRequest(request);
+        Map<String, String> oParam = new HashMap<String, String>();
+        String sForward = "orderList";
+        request.setCharacterEncoding("GBK");
+        response.setCharacterEncoding("GBK");
+        String sTargetPage = StringUtils.defaultIfEmpty(request.getParameter("targetPage"), "");
+        HttpSession session = request.getSession();
+        String creatBy = StringUtil.toString(session.getAttribute("userID"));
+        String roId = StringUtil.toString(session.getAttribute("roId"));
+        String sState = "";
+        if ("unsubmit".equals(sTargetPage)) {  	//未提交
+            sState = "1";
+            if(!"25".equals(roId)){ //控制未提交页面订单显示权限
+                oParam.put("creatBy", creatBy);
+            }
+        }
+        if ("unchecked".equals(sTargetPage)) {  	//待审核页面
+            sState = "2";
+        }
+        if ("terminus".equals(sTargetPage)) {  	//结单页面
+            //配送状态为配送失败，配送成功，取消配送的单都结单
+            sState = "10,8,9,11,12";
+            sForward = "terminus";
+        }
+        oParam.put("state", sState);
+        String company = StringUtil.toString(request.getParameter("company"), "");  //分公司
+        String type1 = StringUtil.toString(request.getParameter("type1"), "");  	//类型
+        String type2 = StringUtil.toString(request.getParameter("type2"), "");  	//子类
+        String product = StringUtil.toString(request.getParameter("product"), "");  //产品
+        String scheme = StringUtil.toString(request.getParameter("scheme"), "");  //营销方案编码
+        String startTime = StringUtil.toString(request.getParameter("startTime"), "");  //开始时间
+        String endTime = StringUtil.toString(request.getParameter("endTime"), "");  	//结束时间
+        String state2 = StringUtil.toString(request.getParameter("state"), "");  		//状态
+        String clickNo = StringUtil.toString(request.getParameter("clickNo"),"");  //客户号码
+        String expressage = StringUtil.toString(request.getParameter("expressage"),"");  //物流商
+        String expressNo = StringUtil.toString(request.getParameter("expressNo"),"");   //快递单号
+        String serialno = StringUtil.toString(request.getParameter("serialno"),"");   //序列号
+        // lijunjun 20120723
+        String distribSuccessStartTime = StringUtil.toString(request.getParameter("distribSuccessStartTime"), "");  //开始时间
+        String distribSuccessEndTime = StringUtil.toString(request.getParameter("distribSuccessEndTime"), "");  	//结束时间
+        oParam.put("company", company);
+        oParam.put("type1", type1);
+        oParam.put("type2", type2);
+        oParam.put("product", product);
+        oParam.put("scheme", scheme);
+        oParam.put("startTime", startTime);
+        oParam.put("endTime", endTime);
+        oParam.put("clickNo", clickNo);
+        oParam.put("expressage", expressage);
+        oParam.put("expressNo", expressNo);
+        oParam.put("serialno", serialno);
+        oParam.put("distribSuccessStartTime", distribSuccessStartTime);
+        oParam.put("distribSuccessEndTime", distribSuccessEndTime);
+        
+        if (StringUtils.isNotEmpty(state2)) {
+            oParam.put("state", StringUtil.getGBK(state2));
+        }
+        int pageSize = 50;
+        int pageNum = 1;  		//当前页
+        int rowCount = 0;
+        String pageStr = request.getParameter("pageNum");
+        if (pageStr != null) {
+            pageNum = Integer.parseInt(pageStr);
+        } else {
+            pageNum = 1;
+        }
+        oParam.put("currentPage", String.valueOf(pageNum));
+        try {
+            //如果上次查询有选择产品类型条件,则加载子类型数据
+            if (StringUtils.isNotEmpty(type1)) {
+                List type2List = m_dataBaseDao.initSelect("st_type", "id", "name", " AND parentID='" + type1 + "'");
+                request.setAttribute("type2List", type2List);
+            }
+            //如果有选择子类型查询条件,则加载该子类型下的产品数据
+            if (StringUtils.isNotEmpty(type2)) {
+                List productList = m_dataBaseDao.initSelect("st_product", "id", "(name + \'－\' + model + \'－\' + color)", " AND typeID='" + type2 + "'");
+                request.setAttribute("productList", productList);
+            }
+            List<DynaBean> aResult = m_orderDao.queryOrderList(oParam, false);  	//数据
+            rowCount = m_orderDao.getOrderCount(oParam);  				//记录条数
+            int pageCount = rowCount % pageSize == 0 ? rowCount / pageSize : (rowCount / pageSize + 1);
+            request.setAttribute("pageNum", pageNum);
+            request.setAttribute("count", rowCount);
+            request.setAttribute("countPage", pageCount);
+            request.setAttribute("list", aResult);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        //return mapping.findForward("orderList");
+        return new ActionForward(EMPCommInfo.getReturnPath(mapping, request.getParameter("menuId"), sForward));
+    }
+
+    /**
+     * 下载模板
+     */
+    @SuppressWarnings("deprecation")
+  public ActionForward getTemplet(ActionMapping mapping, ActionForm form, HttpServletRequest request,
+            HttpServletResponse response) throws Exception {
+        String path = request.getRealPath("/") + "/storage/template/订单批量导入模板.xls";
+        RequestUtils.outExcelTempletToResponse(path, response);
+        return null;
+    }
+
+    /**
+     * 查询单个订单详情
+     */
+    public ActionForward viewOrder(ActionMapping mapping, ActionForm form, HttpServletRequest request,
+            HttpServletResponse response) throws Exception {
+        String sId = StringUtil.toString(request.getParameter("id"));  	//id
+        String operate = StringUtil.toString(request.getParameter("operate"));  	//两个值一个是view(查看详情) 一个是 modify(修改)
+        DynaBean oOrder = m_orderDao.getOrder(sId);
+        if (oOrder != null) {
+            setAttributeToRequest(request);
+            String type1 = StringUtil.toString(oOrder.get("type1"));
+            String type2 = StringUtil.toString(oOrder.get("type2"));
+            String productId = StringUtil.toString(oOrder.get("product"));
+            //加载子类型数据
+            if (StringUtils.isNotEmpty(type1)) {
+                List type2List = m_dataBaseDao.initSelect("st_type", "id", "name", " AND parentID='" + type1 + "'");
+                request.setAttribute("type2List", type2List);
+            }
+            //加载该子类型下的产品数据
+            if (StringUtils.isNotEmpty(type2)) {
+                List productList = m_dataBaseDao.initSelect("st_product", "id", "(name + \'－\' + model + \'－\' + color)", "AND typeID='" + type2 + "'");
+                request.setAttribute("productList", productList);
+            }
+            //加载该产品下的营销案数据
+            if (StringUtils.isNotEmpty(productId)) {
+                List schemeList = m_dataBaseDao.initSelect("st_scheme", "id", "name", " AND productId='" + productId + "'");
+                request.setAttribute("schemeLists", schemeList);
+            }
+
+        }
+        request.setAttribute("oOrder", oOrder);
+        request.setAttribute("id", sId);
+        request.setAttribute("operate", operate);
+        if("verify".equals(operate)){
+            return new ActionForward(EMPCommInfo.getReturnPath(mapping, request.getParameter("menuId"), "verifyOrder"));
+        }
+        return new ActionForward(EMPCommInfo.getReturnPath(mapping, request.getParameter("menuId"), "orderView"));
+    }
+
+
+
+    /**
+     * 批量添加订单
+     * @throws Exception
+     */
+    public ActionForward addOrderByBatch(ActionMapping mapping, ActionForm form, HttpServletRequest request,
+            HttpServletResponse response) throws Exception {
+        response.setContentType("text/html");
+        response.setCharacterEncoding("GBK");
+        StorageOrderForm orderForm = (StorageOrderForm) form;
+        orderForm = (StorageOrderForm) Encoding.convert8859ToGBK(orderForm);
+        FormFile formfile = orderForm.getOrderExcel();
+        InputStream inputstream = formfile.getInputStream();
+//  	System.out.println(formfile);
+        String sMessage = null;
+        PoiGetExcel pel = new PoiGetExcel();
+        try {
+            // 重置文件流
+            inputstream = formfile.getInputStream();
+            // 获取excel表格内容
+            List<String[]> list = pel.getSheetContect(inputstream);
+            if (list.size() != 0) {
+                String userId = (String) request.getSession().getAttribute("userID");
+                String nickName = (String) request.getSession().getAttribute("nickName");
+                // 保存数据
+                String[] aResult = m_orderDao.batchImportOrder(list, userId, nickName);
+                if(list.size()>(Integer.parseInt(aResult[0]) + Integer.parseInt(aResult[1]))){
+                  System.out.println("订单条数："+list.size()+" 成功条数："+aResult[0]+" 失败条数："+aResult[1]);
+                    sMessage = "本次导入订单文件成功"+aResult[0]+"条，失败"+aResult[1]+"条！其余"
+                    +(list.size()-(Integer.parseInt(aResult[0]) + Integer.parseInt(aResult[1])))+"条因后台出现异常未执行导入！成功订单已经回滚";
+                }else{
+                    sMessage = "成功导入" + aResult[0] + "个订单，导入失败" + aResult[1] + "个订单!";
+                    String sMsg = aResult[2];
+                    if (StringUtils.isNotEmpty(sMsg)) {
+                        request.setAttribute("sError", sMsg);  //错误提示消息
+                    }
+                }
+            } else {
+                sMessage = "导入文件没有订单信息！请先填写订单信息!";
+            }
+        } catch (Exception e) {
+            sMessage = "导入失败!请检查导入文件";
+            e.printStackTrace();
+        }
+        request.setAttribute("message", sMessage);
+        return new ActionForward(EMPCommInfo.getReturnPath(mapping, request.getParameter("menuId"), "newOrderByBatch"));
+    }
+
+    /**
+     * 各种操作,提交,审核通过,审核不通过、删除 对订单状态的更改
+     */
+//  public ActionForward changeOrderState(ActionMapping mapping, ActionForm form, HttpServletRequest request,
+//  		HttpServletResponse response) throws Exception {
+//  	Map<String, String> oParam = new HashMap<String, String>();
+//  	String company = StringUtil.toString(request.getParameter("company"), "");	//分公司
+//  	String type1 = StringUtil.toString(request.getParameter("type1"), "");		//类型
+//  	String type2 = StringUtil.toString(request.getParameter("type2"), "");		//子类
+//  	String product = StringUtil.toString(request.getParameter("product"), "");	//产品
+//  	String scheme = StringUtil.toString(request.getParameter("scheme"), "");	//营销方案编码
+//  	String startTime = StringUtil.toString(request.getParameter("startTime"), "");	//开始时间
+//  	String endTime = StringUtil.toString(request.getParameter("endTime"), "");		//结束时间
+//  	String state = StringUtil.toString(request.getParameter("state"), "");			//状态
+//  	String operate = StringUtil.toString(request.getParameter("operate")); 			//操作
+//  	HttpSession session = request.getSession();
+//  	String creatBy = StringUtil.toString(session.getAttribute("nickName"));
+//  	//用来区分提交页面删除按钮与待审核页面删除订单按钮
+//  	String cancelBtn = StringUtil.toString(request.getParameter("cancelBtn"),"");
+////  	String creatBy = StringUtil.toString(session.getAttribute("userName"));
+//  	oParam.put("company", company);
+//  	oParam.put("type1", type1);
+//  	oParam.put("type2", type2);
+//  	oParam.put("product", product);
+//  	oParam.put("scheme", scheme);
+//  	oParam.put("startTime", startTime);
+//  	oParam.put("endTime", endTime);
+//  	oParam.put("state", StringUtil.getGBK(state));
+//  	oParam.put("operate", StringUtil.getGBK(operate));
+//  	oParam.put("creatBy", creatBy);
+//  	/*
+//  	 * 如果不选择复选框提会根据查询条件去操作所有订单，
+//  	 * 添加cancelBtn标识来区别订单提交与待审核页面删除按钮与删除订单按钮
+//  	 */
+//  	oParam.put("cancelBtn", cancelBtn);
+//  	int result = m_orderDao.updateOrderByBatch(oParam);
+//  	RequestUtils.writeDateToResponseInt(result, response);
+//  	return null;
+//  }
+
+    /**
+     * 按照ID更新订单状态
+     */
+    public ActionForward changeOrderStateById(ActionMapping mapping, ActionForm form, HttpServletRequest request,
+            HttpServletResponse response) throws Exception {
+        String[] aIdStr = request.getParameterValues("id");
+        String sState = StringUtil.getGBK(request.getParameter("sState"));
+        String creatBy = StringUtil.toString(request.getSession().getAttribute("nickName"));
+        int nResult = m_orderDao.updateStateByBatchUseId(aIdStr, sState, creatBy);
+        request.setAttribute("nResult", nResult);
+        //判断转跳不同的页面
+        String targetPage = StringUtil.toString(request.getParameter("targetPage"));
+        if("terminus".equals(targetPage)){
+            targetPage = "terminus";
+        }else{
+            targetPage = "orderList";
+        }
+        //return mapping.findForward("orderList");
+        return new ActionForward(EMPCommInfo.getReturnPath(mapping, request.getParameter("menuId"), targetPage));
+    }
+
+    /**
+     * 查询订单的操作日志
+     */
+    public ActionForward viewLogs(ActionMapping mapping, ActionForm form, HttpServletRequest request,
+            HttpServletResponse response) throws Exception {
+        String sId = StringUtil.toString(request.getParameter("sId"));
+        List<DynaBean> aList = m_orderDao.getLogs(sId, null);
+        request.setAttribute("list", aList);
+        //return mapping.findForward("orderLogs");
+        return new ActionForward(EMPCommInfo.getReturnPath(mapping, request.getParameter("menuId"), "orderLogs"));
+    }
+
+    /**
+     * 导出日志导出
+     */
+    public ActionForward exportLogsExcel(ActionMapping mapping, ActionForm form,
+            HttpServletRequest request, HttpServletResponse response)
+            throws Exception {
+        String sId = StringUtil.toString(request.getParameter("sId"));
+        response.setContentType("application/x-download");
+        response.setCharacterEncoding("GBK");
+        response.addHeader("Content-Disposition", "attachment;filename="+sId+"Logs.xls");
+        List<DynaBean> list = m_orderDao.getLogs(sId, null);
+        OutputStream out = response.getOutputStream();
+        ExportExcel excel = new ExportExcel();
+        excel.generalTableExport("订单日志", OrderFormExcel.logsTitle(), list, out);
+        out.close();
+        return null;
+    }
+
+    /**
+     * 验证电话权限
+     * @return
+     */
+    public ActionForward validateRight(ActionMapping mapping, ActionForm form,
+            HttpServletRequest request, HttpServletResponse response)
+            throws Exception {
+        String sClientNo = StringUtil.toString(request.getParameter("clientNo"));
+        String sScheme = StringUtil.toString(request.getParameter("scheme"));
+        boolean bRight = m_orderDao.validateRight(sScheme, sClientNo);
+        int nResult = 1;
+        if (!bRight) {
+            nResult = -1;
+        }
+        
+        /**
+         * 20704客服接口判断 lijunjun 2012-05-24
+         */ 
+        boolean clientNoScheme = SchemeBossValidate.validate(sClientNo, sScheme);
+  	if(!clientNoScheme){
+  		nResult = -1;
+  	}
+        /*String user_id = GlobalValueManager.getInstance().getSysValue("user_id");//刘振光工号user_id
+        String requestXML = "20704,"+sClientNo+"~"+user_id+"~1~"+sScheme+"|";
+        SchemeBossInterfacesDao dao = new SchemeBossInterfacesDao();
+        String backXML = dao.getSchemeBoss(requestXML);
+  	String str = backXML.substring(0, 1);
+  	if(!"0".equals(str)){
+  		nResult = -1;
+  		//backXML = "客户号码："+mobilePhone+",不可办理该向业务，营销方案ID: "+schemeFlag;
+  	}*/
+        
+        
+        
+        RequestUtils.writeDateToResponseInt(nResult, response);
+        return null;
+    }
+
+
+    /**
+     * 查询物流商产品可用数量和锁定数量
+     * @throws Exception
+     */
+    public String getProductAmount(ActionMapping mapping, ActionForm form,
+            HttpServletRequest request, HttpServletResponse response)
+        throws Exception {
+        String sProductId = "";
+        String expressageID = "";
+        String flag = StringUtil.toString(request.getParameter("flag"));
+        if("expflag".equals(flag)){
+            expressageID = StringUtil.toString(request.getParameter("value"));
+            sProductId = StringUtil.toString(request.getParameter("changeValue"));
+        }else{
+             sProductId = StringUtil.toString(request.getParameter("value"));
+            expressageID = StringUtil.toString(request.getParameter("changeValue"));
+        }
+        List list = m_dataBaseDao.getProductAmountLock(sProductId,expressageID);
+        RequestUtils.writeDateToResponse(list, response);
+        return null;
+    }
+
+    /**
+     * 导出错误信息
+     */
+    @SuppressWarnings("deprecation")
+  public ActionForward importError(ActionMapping mapping, ActionForm form, HttpServletRequest request,
+            HttpServletResponse response) throws Exception {
+        String sError = StringUtil.getGBK(request.getParameter("sError"));
+        String[] sMsg = sError.split("</p>");
+        String path = request.getRealPath("/") + "/temp/错误信息提示.txt";
+        File file = new File(path);
+        // 获取文件目录
+        String mkdir = path.substring(0, path.lastIndexOf("/"));
+        File mkdirf = new File(mkdir);
+        // 判断是否存在目录，如果不存在，则创建
+        if (!mkdirf.exists())
+            mkdirf.mkdir();
+        // 获取文件名称
+        String fileName = file.getName();
+        fileName = new String(fileName.getBytes("gb2312"), "ISO8859-1");
+        response.reset();
+        // 设置文件类型
+        response.setContentType("APPLICATION/XLS");
+        // 设置头部信息
+        response.setHeader("Content-Disposition", "attachment; filename="
+                + fileName);
+        BufferedOutputStream buff = null;
+        ServletOutputStream outSTr = null;
+
+        try {
+            outSTr = response.getOutputStream();// 建立
+            buff = new BufferedOutputStream(outSTr);
+            buff.write(("错误信息提示"
+                    + "\r\n\r\n").getBytes("UTF-8"));
+            StringBuffer rowDataBuffer = new StringBuffer();
+            for(int i=0;i<sMsg.length;i++){
+                String strError = sMsg[i].replace("<p>", "").replace("</p>", "");
+                rowDataBuffer.append(strError);
+                rowDataBuffer.append("\t\r\n");
+            }
+            buff.write(rowDataBuffer.toString().getBytes("UTF-8"));
+            buff.flush();
+            buff.close();
+        } catch (Exception e) {
+            // TODO: handle exception
+            e.printStackTrace();
+        } finally {
+            try {
+                buff.close();
+                outSTr.close();
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 订单数据导出采用.csv格式
+     */
+  public ActionForward exportOrderInfo(ActionMapping mapping,
+            ActionForm form, HttpServletRequest request,
+            HttpServletResponse response) throws Exception {
+  	System.out.println("======================");
+        Map<String, String> oParam = new HashMap<String, String>();
+        String company = StringUtil.toString(request.getParameter("company"), "");  //分公司
+        String type1 = StringUtil.toString(request.getParameter("type1"), "");  	//类型
+        String type2 = StringUtil.toString(request.getParameter("type2"), "");  	//子类
+        String product = StringUtil.toString(request.getParameter("product"), "");  //产品
+        String scheme = StringUtil.toString(request.getParameter("scheme"), "");  //营销方案编码
+        String startTime = StringUtil.toString(request.getParameter("startTime"), "");  //开始时间
+        String endTime = StringUtil.toString(request.getParameter("endTime"), "");  	//结束时间
+        String state = StringUtil.toString(request.getParameter("state"), "");  		//状态
+        String clickNo = StringUtil.toString(request.getParameter("clickNo"),"");  //客户号码
+        String expressage = StringUtil.toString(request.getParameter("expressage"),"");  //物流商
+        String expressNo = StringUtil.toString(request.getParameter("expressNo"),"");   //快递单号
+        String serialno = StringUtil.toString(request.getParameter("serialno"),"");   //序列号
+        String targetPage = StringUtils.defaultIfEmpty(request.getParameter("targetPage"), "");  	//加载页面
+        // lijunjun 20120723
+        String distribSuccessStartTime = StringUtil.toString(request.getParameter("distribSuccessStartTime"), "");  //开始时间
+        String distribSuccessEndTime = StringUtil.toString(request.getParameter("distribSuccessEndTime"), "");  	//结束时间
+        
+        if(StringUtils.isEmpty(state)){
+            if ("unsubmit".equals(targetPage)) {  	//未提交
+                state = "1";
+            }
+            if ("unchecked".equals(targetPage)) {
+                state = "2";
+            }
+            if ("terminus".equals(targetPage)) {  	//结单页面
+                //配送状态为配送失败，配送成功，取消配送的单都结单
+                state = "10,8,9,11,12";
+
+            }
+        }
+        oParam.put("company", company);
+        oParam.put("type1", type1);
+        oParam.put("type2", type2);
+        oParam.put("product", product);
+        oParam.put("scheme", scheme);
+        oParam.put("startTime", startTime);
+        oParam.put("endTime", endTime);
+        oParam.put("clickNo", clickNo);
+        oParam.put("expressage", expressage);
+        oParam.put("expressNo", expressNo);
+        oParam.put("serialno", serialno);
+        oParam.put("state", state);
+        oParam.put("distribSuccessStartTime", distribSuccessStartTime);
+        oParam.put("distribSuccessEndTime", distribSuccessEndTime);
+
+        String path = "";
+        File file ;
+        String fileName = "";
+
+        List<Map<String,String>> aList = m_orderDao.getAllOrderListToExport(oParam);
+        int rowCount = m_orderDao.getOrderCount(oParam);
+        int count = 62000;
+        int countsheet = rowCount/count+(rowCount%count>0?1:0);
+
+        long flag = System.currentTimeMillis();
+        for (int i = 0; i < countsheet; i++) {
+           String  filePath = request.getRealPath("/") + "/storage/csvExporterFile/order/"+flag;
+           File mFile = new File(filePath);
+//           System.out.println("!mFile.exists()="+!mFile.exists());
+           /**
+            * 动态增加目录
+            */
+           if(!mFile.exists()){
+             mFile.mkdirs();
+           }else{
+             mFile.delete();
+           }
+
+           path = request.getRealPath("/") + "/storage/csvExporterFile/order/"+flag+"/订单信息"+ i +".csv";
+//           System.out.println("path=="+path);
+            file = new File(path);
+            // 获取文件目录
+            if (file.exists()){
+                file.delete();
+            }else{
+                file.createNewFile();
+            }
+            // 获取文件名称
+            fileName = file.getName();
+            CSVExporter exporter = null;
+            try {
+                exporter = new CSVExporter(path);
+                exporter.exportOrderHeader();
+                exporter.exportOrderData(aList.subList(i*count, ((i+1)*count)>rowCount?rowCount:(i+1)*count));
+            } catch (Exception e) {
+                // TODO Auto-generated catch block
+                e.printStackTrace();
+            } finally {
+                if (exporter != null)
+                    exporter.close();
+            }
+        }
+        String zipPath = request.getRealPath("/") + "/storage/csvExporterFile/orderZip" + "\\订单信息"+flag+".zip";
+        Zip11 z11 = new Zip11();
+        z11.zip(request.getRealPath("/") + "/storage/csvExporterFile/order/"+flag, zipPath);
+        String filePath = zipPath;
+        response.reset();
+        fileName = "订单信息"+flag+".zip";
+        java.io.File f = new java.io.File(filePath);
+        response.setContentType("application/x-download");
+        response.setHeader("Content-Disposition", "attachment;filename="
+                + java.net.URLEncoder.encode(fileName, "UTF8"));
+        response.setContentLength((int) f.length()); // 设置下载内容大小
+        if (fileName != null && filePath != null) {
+            try {
+                if (f.exists() && f.canRead()) {
+                    byte[] buffer = new byte[4096]; // 缓冲区
+                    BufferedOutputStream output = null;
+                    BufferedInputStream input = null;
+                    try {
+                        output = new BufferedOutputStream(response.getOutputStream());
+                        input = new BufferedInputStream(new FileInputStream(f));
+                        int n = (-1);
+                        while ((n = input.read(buffer, 0, 4096)) > -1) {
+                            output.write(buffer, 0, n);
+                        }
+                        response.flushBuffer();
+                    } catch (Exception e) {
+
+                    }finally {// 用户可能取消了下载
+                       /**
+                         * 删除文件
+                         */
+                        File folder = new File(request.getRealPath("/") + "/storage/csvExporterFile/order");
+                        if(folder.isDirectory()){                       //否则如果它是一个目录
+                            File files[] = folder.listFiles();          //声明目录下所有的文件 files[];
+                            for(int i=0;i<files.length;i++){            //遍历目录下所有的文件
+                              File dirFile = new File(files[i].getAbsolutePath());
+                              File[] file1 = dirFile.listFiles();
+                              for (int j = 0; j < file1.length; j++) {
+  								if(file1[j].isFile()){
+  									file1[j].delete();
+  								}
+  							}
+                              files[i].delete();
+                            }
+                        }
+
+                        /**
+                         * 删除压缩包中的文件
+                         */
+                        File folderz = new File(request.getRealPath("/") + "/storage/csvExporterFile/orderZip");
+                        File[] filez = folderz.listFiles();
+                        for (int i=0;i<filez.length;i++){
+                          filez[i].delete();
+                        }
+
+                        if (input != null)
+                            input.close();
+                        if (output != null)
+                            output.close();
+                    }
+                }
+                return null;
+            } catch (Exception ex) {
+                ex.printStackTrace();
+            }
+        }
+        return null;
+    }
+
+//批量导入IMEI查询订单信息
+  public ActionForward selectImeiOrder(ActionMapping mapping, ActionForm form,
+  		HttpServletRequest request, HttpServletResponse response) throws Exception {
+  	 setAttributeToRequest(request);
+  	 response.setContentType("text/html");
+        response.setCharacterEncoding("GBK");
+        Map<String,String> oParam = new HashMap<String,String>();
+   	String company = StringUtil.toString(request.getParameter("company"), "");	//分公司
+        String type1 = StringUtil.toString(request.getParameter("type1"), "");  	//类型
+        String type2 = StringUtil.toString(request.getParameter("type2"), "");  	//子类
+        String product = StringUtil.toString(request.getParameter("product"), "");  //产品
+        String scheme = StringUtil.toString(request.getParameter("scheme"), "");  //营销方案编码
+        String startTime = StringUtil.toString(request.getParameter("startTime"), "");  //开始时间
+        String endTime = StringUtil.toString(request.getParameter("endTime"), "");  	//结束时间
+        String state = StringUtil.toString(request.getParameter("state"), "");  		//状态
+        String clickNo = StringUtil.toString(request.getParameter("clickNo"),"");  //客户号码
+        String expressage = StringUtil.toString(request.getParameter("expressage"),"");  //物流商
+        String expressNo = StringUtil.toString(request.getParameter("expressNo"),"");   //快递单号
+        String serialno = StringUtil.toString(request.getParameter("serialno"),"");   //序列号
+        oParam.put("company", company);
+        oParam.put("type1", type1);
+        oParam.put("type2", type2);
+        oParam.put("product", product);
+        oParam.put("scheme", scheme);
+        oParam.put("startTime", startTime);
+        oParam.put("endTime", endTime);
+        oParam.put("clickNo", clickNo);
+        oParam.put("expressage", expressage);
+        oParam.put("expressNo", expressNo);
+        oParam.put("serialno", serialno);
+        oParam.put("state", state);
+        /*
+         * 获取所有导入的序列号
+         */
+        String strNo = "";
+        String msg = "";
+        HttpSession session = request.getSession();
+        StorageOrderForm orderForm = (StorageOrderForm) form;
+        if(StringUtils.isNotEmpty(StringUtil.toString(orderForm.getOrderExcel(),""))){
+          session.removeAttribute("strNo");//删除strNo
+          List<String> noListOld = getSheetContect(orderForm);
+          Set<String> noList = new HashSet<String>(noListOld);
+      	/*
+             * 拼接序列号
+             */
+      	if(!noList.isEmpty()){
+      		for(String serialNo : noList){
+  				/*
+  				 * 去全角后，在判断序列号是否由数字、字母组成
+  				 */
+  				String pattamNo = StringUtil.checkParttern(StringUtil.QtoB(serialNo));
+  				if(!"".equals(pattamNo)){
+  					if ("".equals(strNo)) {
+  						strNo = "'" + pattamNo + "'";
+  					}
+  					else {
+  						strNo += ",'" + pattamNo + "'";
+  					}
+  				}
+      		}
+      	}
+      	if("".equals(strNo)){
+      		request.setAttribute("message", "导入序列号格式有误，请查看导入序列号txt文件！");
+      		return mapping.findForward("imeiByBatch");
+      	}else{
+      		session.setAttribute("strNo", strNo);//将导入序列号保存到session
+      	}
+      	msg = "导入文件重复序列号为："+(noListOld.size()-noList.size())+"个!";
+        }else{
+          strNo = StringUtil.toString(session.getAttribute("strNo"));
+        }
+        oParam.put("strNo", strNo);
+  	int pageSize = 50;
+        int pageNum = 1;  		//当前页
+        int rowCount = 0;
+        String pageStr = request.getParameter("pageNum");
+        if (pageStr != null) {
+            pageNum = Integer.parseInt(pageStr);
+        } else {
+            pageNum = 1;
+        }
+        oParam.put("currentPage", String.valueOf(pageNum));
+  	try {
+          //如果上次查询有选择产品类型条件,则加载子类型数据
+          if (StringUtils.isNotEmpty(type1)) {
+              List type2List = m_dataBaseDao.initSelect("st_type", "id", "name", " AND parentID='" + type1 + "'");
+              request.setAttribute("type2List", type2List);
+          }
+          //如果有选择子类型查询条件,则加载该子类型下的产品数据
+          if (StringUtils.isNotEmpty(type2)) {
+              List productList = m_dataBaseDao.initSelect("st_product", "id", "(name + \'－\' + model + \'－\' + color)", " AND typeID='" + type2 + "'");
+              request.setAttribute("productList", productList);
+          }
+  		List<DynaBean> aResult = m_orderDao.queryOrderList(oParam,false);		//数据
+          rowCount = m_orderDao.getOrderCount(oParam);					//记录条数
+          int pageCount = rowCount % pageSize == 0 ? rowCount / pageSize : (rowCount / pageSize + 1);
+          request.setAttribute("pageNum", pageNum);
+          request.setAttribute("count", rowCount);
+          request.setAttribute("countPage", pageCount);
+          request.setAttribute("list", aResult);
+          request.setAttribute("msg", msg);
+      } catch (Exception e) {
+          e.printStackTrace();
+      }
+      return new ActionForward(EMPCommInfo.getReturnPath(mapping, request.getParameter("menuId"), "importImeiList"));
+  }
+
+//  读取导入的序列号
+
+  public static List<String> getSheetContect(StorageOrderForm order){
+  	order = (StorageOrderForm) Encoding.convert8859ToGBK(order);
+  	try{
+  		List<String> no = new ArrayList<String>();
+  		//获取上传文件
+  		FormFile fileName = order.getOrderExcel();
+  		if(fileName == null){
+  			return no;
+  		}
+  		InputStream inputstream = fileName.getInputStream();
+  		BufferedReader   in   =   new   BufferedReader(new InputStreamReader(inputstream));
+  		String  str = new String ();
+  		while((str = in.readLine())!=null){
+  			if(!"".equals(str)){
+  				no.add(str.toUpperCase().trim());
+  			}
+  		}
+  		return no;
+  	}catch(IOException   ioe){
+  		ioe.printStackTrace();
+  	}
+  	return null;
+  }
+
+  /**
+   * 导出excel
+   * author : luoyw
+   * function : 每导出10000条订单数据分一页
+   */
+  public ActionForward getAllExportExcel(ActionMapping mapping, ActionForm form, HttpServletRequest request,
+  		HttpServletResponse response) throws Exception {
+  	Map<String,String> oParam = RequestUtils.getMapByRequest(request);
+  	HttpSession session = request.getSession();
+  	String strNo = StringUtil.toString(session.getAttribute("strNo"));
+  	oParam.put("strNo", strNo);
+  	int oCount = m_orderDao.getOrderCount(oParam);
+  	int pageCount = 1;
+   	if (oCount > 10000) {
+   		pageCount = (oCount - oCount % 10000) / 10000	+ (oCount % 10000 > 0 ? 1 : 0);
+   	}
+  	ExportExcel excel = new ExportExcel();
+  	List<DynaBean> aList = null;
+  	String sCurrDate = Tools.getCurrDateTime();
+   	sCurrDate = sCurrDate.replace(":", "");
+   	for (int i=1; i<=pageCount; i++) {
+   		aList = m_orderDao.queryOrderList(oParam,true);
+   		System.out.println("导出订单数据==========="+aList.size());
+   		excel.baseOnTitleTableExport1("订单", OrderFormExcel.orderTitle(), aList,i,"d://订单/订单"+sCurrDate+".xls");
+   	}
+   	OutputStream out = null;
+   	BufferedInputStream in = null;
+  	try {
+  		File file = new File("D://订单/");
+  		if (!file.exists()){
+  			file.mkdirs();
+  		}
+  		in = new BufferedInputStream(new FileInputStream("d://订单/订单"+sCurrDate+".xls"));
+  		byte[] buf = new byte[1024];
+  		response.reset();
+  		// 设置文件类型
+  		response.setContentType("APPLICATION/XLS");
+  		// 设置头部信息
+  		response.setHeader("Content-Disposition", "attachment; filename=订单"+sCurrDate+".xls");
+  		// 获取得响应流
+  		out = response.getOutputStream();
+  		while (in.read(buf) > 0) {
+  			out.write(buf);
+  		}
+  	} catch (Exception e) {
+  		e.printStackTrace();
+  	}
+  	finally {
+  		try {
+  			if (in != null) {
+  				in.close();
+  			}
+  			if (out != null) {
+  				out.close();
+  			}
+  		}
+  		catch (Exception e) {
+  		}
+  	}
+  	return null;
+  }
+}
